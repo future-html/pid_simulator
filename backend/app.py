@@ -71,6 +71,6 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 
-if __name__ == '__main__':
-    # Run the Flask app on port 3000
-    app.run(debug=True, port=3000)
+# if __name__ == '__main__':
+#     # Run the Flask app on port 3000
+#     app.run(debug=True, port=3000)

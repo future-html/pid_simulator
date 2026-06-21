@@ -1,7 +1,7 @@
 import React, { useState, forwardRef } from 'react';
 import CanvasBlock from './CanvasBlock';
 import ComponentPickerPopup from './ComponentPickerPopup';
-import { BLOCK_W, BLOCK_H, type BlockData, type ConnectionData, type componentLibrary } from '../lib/data';
+import { BLOCK_W, BLOCK_H, type BlockData, type ConnectionData } from '../lib/data';
 
 interface CanvasProps {
   blocks: BlockData[];

@@ -1,4 +1,4 @@
-import React from 'react'
+
 import SimulinkBuilderPage from './pages/SimulinkBuilderPage'
 
 const App = () => {

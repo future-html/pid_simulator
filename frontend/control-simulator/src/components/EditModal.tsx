@@ -17,7 +17,7 @@ const EditModal: React.FC<EditModalProps> = ({
 }) => {
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 p-6 rounded-xl shadow-2xl w-[400px] border border-gray-700">
+      <div className="bg-gray-800 p-6 rounded-xl shadow-2xl  border border-gray-700">
         <h2 className="text-lg font-bold text-white mb-2">Edit Block Parameter</h2>
         <p className="text-sm text-gray-400 mb-4">Modify the block's value or label</p>
 

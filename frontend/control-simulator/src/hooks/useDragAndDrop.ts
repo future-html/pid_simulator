@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { BLOCK_W, BLOCK_H, componentLibrary,  type BlockData } from '../lib/data';
+import { BLOCK_W, BLOCK_H, componentLibrary} from '../lib/data';
 
 export function useDragAndDrop(
   addBlock: (type: string, x: number, y: number, defaultVal: string) => void,

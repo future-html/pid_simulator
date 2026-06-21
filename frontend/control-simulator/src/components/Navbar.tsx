@@ -28,7 +28,7 @@ const Navbar: React.FC<NavbarProps> = ({ onExport, onSendBackend, onClear, hasBl
           ))}
         </div>
 
-        <div className="flex gap-2 flex-shrink-0 border-l border-gray-700 pl-4">
+        <div className="flex gap-2 border-l border-gray-700 pl-4">
           <button
             onClick={onExport}
             className="px-3 py-2 bg-cyan-400 text-white text-sm rounded hover:bg-cyan-600 transition font-medium"

@@ -18,7 +18,7 @@ const PaletteItem: React.FC<PaletteItemProps> = ({ type, defaultVal, label }) =>
     <div
       draggable
       onDragStart={handleDragStart}
-      className="cursor-grab active:cursor-grabbing flex-shrink-0 hover:opacity-80 transition-opacity"
+      className="cursor-grab active:cursor-grabbing hover:opacity-80 transition-opacity"
       style={{ width: BLOCK_W, height: BLOCK_H }}
     >
       <BlockRenderer type={type} value={defaultVal} />

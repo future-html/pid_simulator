@@ -9,32 +9,20 @@ interface CanvasBlockProps {
   y: number;
   value: string;
   onClick: (id: number) => void;
-  onDragStart: (e: React.DragEvent, id: number) => void;
-  onDragEnd: (e: React.DragEvent) => void;
 }
 
-const CanvasBlock: React.FC<CanvasBlockProps> = ({
-  id,
-  type,
-  x,
-  y,
-  value,
-  onClick,
-  onDragStart,
-  onDragEnd,
-}) => {
+const CanvasBlock: React.FC<CanvasBlockProps> = ({ id, type, x, y, value, onClick }) => {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', `move-${id}`);
     e.dataTransfer.setData('offsetX', e.nativeEvent.offsetX.toString());
     e.dataTransfer.setData('offsetY', e.nativeEvent.offsetY.toString());
-    onDragStart(e, id);
+    // Do NOT set effectAllowed – the default is fine
   };
 
   return (
     <div
       draggable
       onDragStart={handleDragStart}
-      onDragEnd={onDragEnd}
       onClick={() => onClick(id)}
       className="absolute cursor-move hover:z-20 transition-shadow group"
       style={{ left: x, top: y, width: BLOCK_W, height: BLOCK_H }}

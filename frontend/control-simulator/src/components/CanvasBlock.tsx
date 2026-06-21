@@ -28,31 +28,38 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({ id, type, x, y, value, onClic
       style={{ left: x, top: y, width: BLOCK_W, height: BLOCK_H }}
     >
       <BlockRenderer type={type} value={value} />
+
       {/* Hover highlight */}
       <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/10 transition-colors pointer-events-none rounded-sm border-2 border-transparent group-hover:border-blue-400 group-hover:border-dashed" />
-      
-      {/* Directional handles – visible on group hover */}
+
+      {/* Directional handles */}
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-        {/* Right handle */}
         <button
           className="absolute -right-2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
           onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'right'); }}
         >+</button>
-        {/* Left handle */}
         <button
           className="absolute -left-2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
           onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'left'); }}
         >+</button>
-        {/* Top handle */}
         <button
           className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
           onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'top'); }}
         >+</button>
-        {/* Bottom handle */}
         <button
           className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
           onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'bottom'); }}
         >+</button>
+      </div>
+
+      {/* Value label below the block */}
+      <div
+        className="absolute left-0 right-0 flex justify-center pointer-events-none select-none"
+        style={{ top: BLOCK_H + 4 }}
+      >
+        <span className="text-[10px] text-gray-300 bg-black/60 px-1.5 py-0.5 rounded whitespace-nowrap leading-tight">
+          {type}
+        </span>
       </div>
     </div>
   );

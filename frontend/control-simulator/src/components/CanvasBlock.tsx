@@ -9,14 +9,14 @@ interface CanvasBlockProps {
   y: number;
   value: string;
   onClick: (id: number) => void;
+  onAddHandleClick: (id: number, direction: 'left' | 'right' | 'top' | 'bottom') => void;
 }
 
-const CanvasBlock: React.FC<CanvasBlockProps> = ({ id, type, x, y, value, onClick }) => {
+const CanvasBlock: React.FC<CanvasBlockProps> = ({ id, type, x, y, value, onClick, onAddHandleClick }) => {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', `move-${id}`);
     e.dataTransfer.setData('offsetX', e.nativeEvent.offsetX.toString());
     e.dataTransfer.setData('offsetY', e.nativeEvent.offsetY.toString());
-    // Do NOT set effectAllowed – the default is fine
   };
 
   return (
@@ -24,11 +24,36 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({ id, type, x, y, value, onClic
       draggable
       onDragStart={handleDragStart}
       onClick={() => onClick(id)}
-      className="absolute cursor-move hover:z-20 transition-shadow group"
+      className="absolute cursor-move group"
       style={{ left: x, top: y, width: BLOCK_W, height: BLOCK_H }}
     >
       <BlockRenderer type={type} value={value} />
+      {/* Hover highlight */}
       <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/10 transition-colors pointer-events-none rounded-sm border-2 border-transparent group-hover:border-blue-400 group-hover:border-dashed" />
+      
+      {/* Directional handles – visible on group hover */}
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+        {/* Right handle */}
+        <button
+          className="absolute -right-2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
+          onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'right'); }}
+        >+</button>
+        {/* Left handle */}
+        <button
+          className="absolute -left-2 top-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
+          onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'left'); }}
+        >+</button>
+        {/* Top handle */}
+        <button
+          className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
+          onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'top'); }}
+        >+</button>
+        {/* Bottom handle */}
+        <button
+          className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs pointer-events-auto z-20"
+          onClick={(e) => { e.stopPropagation(); onAddHandleClick(id, 'bottom'); }}
+        >+</button>
+      </div>
     </div>
   );
 };

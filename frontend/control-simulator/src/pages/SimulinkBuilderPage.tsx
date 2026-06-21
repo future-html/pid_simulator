@@ -3,38 +3,31 @@ import Navbar from '../components/Navbar';
 import Canvas from '../components/Canvas';
 import EditModal from '../components/EditModal';
 import { useBlocks } from '../hooks/useBlocks';
-import { componentLibrary } from '../lib/data';
+import { componentLibrary, BLOCK_W, BLOCK_H  } from '../lib/data';
 
 const SimulinkBuilderPage: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const { blocks, addBlock, moveBlock, updateBlockValue, deleteBlock, clearBlocks } = useBlocks();
+  const { blocks, connections,  addBlock, moveBlock, updateBlockValue, addConnection,  deleteBlock, clearBlocks } = useBlocks();
 
   const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
   const [tempValue, setTempValue] = useState('');
 
-  // --- New block from palette ---
+   // --- New block from palette (navbar drag) still works ---
   const handleDropBlock = useCallback(
     (type: string, x: number, y: number) => {
       let defaultVal = '';
       for (const category of Object.values(componentLibrary)) {
         const found = category.find(i => i.type === type);
-        if (found) {
-          defaultVal = found.defaultVal;
-          break;
-        }
+        if (found) { defaultVal = found.defaultVal; break; }
       }
       addBlock(type, x, y, defaultVal);
     },
     [addBlock]
   );
 
-  // --- Move existing block (called from Canvas drop) ---
-  const handleMoveBlock = useCallback(
-    (id: number, x: number, y: number) => {
-      moveBlock(id, x, y);
-    },
-    [moveBlock]
-  );
+  const handleMoveBlock = useCallback((id: number, x: number, y: number) => {
+    moveBlock(id, x, y);
+  }, [moveBlock]);
 
   const openModal = useCallback(
     (id: number) => {
@@ -106,6 +99,33 @@ const SimulinkBuilderPage: React.FC = () => {
     if (window.confirm('Clear all blocks?')) clearBlocks();
   }, [clearBlocks]);
 
+
+   // --- New: add connected block from a handle ---
+  const handleAddConnectedBlock = useCallback(
+    (sourceId: number, direction: 'left' | 'right' | 'top' | 'bottom', type: string) => {
+      const sourceBlock = blocks.find(b => b.id === sourceId);
+      if (!sourceBlock) return;
+
+      let defaultVal = '';
+      for (const category of Object.values(componentLibrary)) {
+        const found = category.find(i => i.type === type);
+        if (found) { defaultVal = found.defaultVal; break; }
+      }
+
+      // Calculate position based on direction (gap of 30px)
+      const gap = 30;
+      let newX = sourceBlock.x, newY = sourceBlock.y;
+      if (direction === 'right') newX = sourceBlock.x + BLOCK_W + gap;
+      else if (direction === 'left') newX = sourceBlock.x - BLOCK_W - gap;
+      else if (direction === 'bottom') newY = sourceBlock.y + BLOCK_H + gap;
+      else if (direction === 'top') newY = sourceBlock.y - BLOCK_H - gap;
+
+      const newId = addBlock(type, newX, newY, defaultVal);
+       addConnection(sourceId, newId, direction);   // ← pass direction
+    },
+    [blocks, addBlock, addConnection]
+  );
+
   return (
     <div className="h-screen flex flex-col bg-black text-white font-sans overflow-hidden relative">
       <Navbar
@@ -117,9 +137,11 @@ const SimulinkBuilderPage: React.FC = () => {
       <Canvas
         ref={canvasRef}
         blocks={blocks}
+        connections={connections}
         onDropBlock={handleDropBlock}
         onMoveBlock={handleMoveBlock}
         onBlockClick={openModal}
+        onAddConnectedBlock={handleAddConnectedBlock}
       />
       {editingBlockId !== null && (
         <EditModal

@@ -14,7 +14,7 @@ import time
 # --- Corrected MQTT Configuration (NETPIE) ---
 NETPIE_CLIENT_ID = "427e0ae3-fd74-471a-8cc6-3f4dfc7d3641"   
 NETPIE_TOKEN = "W8xAzJNmSQAD3DnMZk9kU4DQAC3hksvs"           
-NETPIE_SECRET = "xq79QfBmDBYQ4ni3fnoXVwjfvfy3k2mg" # <-- You need to add this from NETPIE
+NETPIE_SECRET = "xq79QfBmDBYQ4ni3fnoXVwjfvfy3k2mg"
 NETPIE_BROKER = os.getenv("NETPIE_BROKER", "broker.netpie.io")
 
 mqtt_client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)

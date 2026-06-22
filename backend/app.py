@@ -7,7 +7,39 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
 from bson.objectid import ObjectId
+import json
+import paho.mqtt.client as mqtt
+from threading import Lock
 
+# --- Corrected MQTT Configuration (NETPIE) ---
+NETPIE_CLIENT_ID = "427e0ae3-fd74-471a-8cc6-3f4dfc7d3641"   
+NETPIE_TOKEN = "W8xAzJNmSQAD3DnMZk9kU4DQAC3hksvs"           
+NETPIE_SECRET = "xq79QfBmDBYQ4ni3fnoXVwjfvfy3k2mg" # <-- You need to add this from NETPIE
+NETPIE_BROKER = os.getenv("NETPIE_BROKER", "broker.netpie.io")
+
+mqtt_client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)
+# 2. Token goes into username, Secret goes into password
+mqtt_client.username_pw_set(NETPIE_TOKEN, NETPIE_SECRET)
+
+# Global lock for thread safety when publishing
+mqtt_lock = Lock()
+
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print("✅ Connected to NETPIE MQTT broker")
+    else:
+        print(f"❌ Connection failed with code {rc}")
+
+mqtt_client.on_connect = on_connect
+
+# Connect and start the loop in a background thread (non-blocking)
+try:
+    mqtt_client.connect(NETPIE_BROKER, 1883, 60)
+    mqtt_client.loop_start()  # runs in a daemon thread
+except Exception as e:
+    print(f"❌ MQTT connection error: {e}")
+    
+    
 load_dotenv()
 
 app = Flask(__name__)
@@ -26,6 +58,45 @@ except ConnectionFailure:
 
 db = client['sample_mflix']
 users_collection = db['users']
+
+
+@app.route('/api/shadow/update', methods=['POST'])
+def update_shadow():
+    """
+    Updates the NETPIE Device Shadow.
+    Expects JSON: {"temp": 24.5, "humidity": 60, "status": "ON"}
+    """
+    # 1. Get the raw data from the user's request
+    sensor_data = request.get_json()
+    
+    if not sensor_data:
+        return jsonify({"error": "No data provided"}), 400
+
+    # 2. Wrap it in the {"data": { ... }} structure NETPIE requires
+    shadow_payload = {
+        "data": sensor_data
+    }
+
+    # 3. Convert the Python dictionary into a JSON string
+    payload_string = json.dumps(shadow_payload)
+    topic = "@shadow/data/update"
+
+    try:
+        with mqtt_lock:
+            # Publish to the shadow topic
+            result = mqtt_client.publish(topic, payload_string, qos=1)
+            
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            return jsonify({
+                "status": "Shadow updated successfully", 
+                "topic": topic, 
+                "payload_sent": shadow_payload
+            }), 200
+        else:
+            return jsonify({"error": f"Publish failed with code {result.rc}"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # --- ROUTES สำหรับจัดการ USERS (ของเดิมของคุณ) ---
 

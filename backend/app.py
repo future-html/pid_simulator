@@ -10,7 +10,7 @@ from bson.objectid import ObjectId
 import json
 import paho.mqtt.client as mqtt
 from threading import Lock
-
+import time
 # --- Corrected MQTT Configuration (NETPIE) ---
 NETPIE_CLIENT_ID = "427e0ae3-fd74-471a-8cc6-3f4dfc7d3641"   
 NETPIE_TOKEN = "W8xAzJNmSQAD3DnMZk9kU4DQAC3hksvs"           
@@ -59,44 +59,64 @@ except ConnectionFailure:
 db = client['sample_mflix']
 users_collection = db['users']
 
-
 @app.route('/api/shadow/update', methods=['POST'])
 def update_shadow():
     """
-    Updates the NETPIE Device Shadow.
-    Expects JSON: {"temp": 24.5, "humidity": 60, "status": "ON"}
+    Updates the NETPIE Device Shadow with automatic retry logic.
     """
-    # 1. Get the raw data from the user's request
     sensor_data = request.get_json()
-    
     if not sensor_data:
         return jsonify({"error": "No data provided"}), 400
 
-    # 2. Wrap it in the {"data": { ... }} structure NETPIE requires
-    shadow_payload = {
-        "data": sensor_data
-    }
-
-    # 3. Convert the Python dictionary into a JSON string
+    # Wrap it in NETPIE's required structure
+    shadow_payload = {"data": sensor_data}
     payload_string = json.dumps(shadow_payload)
     topic = "@shadow/data/update"
 
-    try:
-        with mqtt_lock:
-            # Publish to the shadow topic
-            result = mqtt_client.publish(topic, payload_string, qos=1)
+    # --- Retry Settings ---
+    max_retries = 5       # Stop trying after 5 attempts
+    retry_delay = 1.0     # Wait 1 second between attempts
+    attempt = 0
+
+    while attempt < max_retries:
+        attempt += 1
+        
+        # 1. If the client isn't connected yet, wait and try again
+        if not mqtt_client.is_connected():
+            print(f"⚠️ [Attempt {attempt}/{max_retries}] MQTT client offline. Waiting {retry_delay}s...")
+            time.sleep(retry_delay)
+            continue
+
+        # 2. If connected, attempt to publish
+        try:
+            with mqtt_lock:
+                result = mqtt_client.publish(topic, payload_string, qos=1)
             
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            return jsonify({
-                "status": "Shadow updated successfully", 
-                "topic": topic, 
-                "payload_sent": shadow_payload
-            }), 200
-        else:
-            return jsonify({"error": f"Publish failed with code {result.rc}"}), 500
+            # 3. Check if the broker accepted the request
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                # Optional: Force the code to wait until the broker acknowledges receipt (QoS 1)
+                # result.wait_for_publish(timeout=2.0)
+                
+                print(f"✅ Shadow updated successfully on attempt {attempt}!")
+                return jsonify({
+                    "status": "Shadow updated successfully",
+                    "attempts": attempt,
+                    "topic": topic,
+                    "payload_sent": shadow_payload
+                }), 200
             
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            print(f"⚠️ [Attempt {attempt}/{max_retries}] Publish failed with code {result.rc}")
+            
+        except Exception as e:
+            print(f"❌ [Attempt {attempt}/{max_retries}] Error during publish: {e}")
+        
+        # Wait before the next attempt loop
+        time.sleep(retry_delay)
+
+    # If the code reaches here, it means all retries failed
+    return jsonify({
+        "error": f"Failed to update shadow after {max_retries} attempts. Broker unavailable."
+    }), 503
 
 # --- ROUTES สำหรับจัดการ USERS (ของเดิมของคุณ) ---
 

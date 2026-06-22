@@ -37,7 +37,7 @@ const SimulinkBuilderPage: React.FC = () => {
   const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
   const [tempValue, setTempValue] = useState("");
   const [editingSubsystemId, setEditingSubsystemId] = useState<number | null>(
-    null
+    null,
   );
 
   // Helper function to recursively build nested block structure
@@ -76,14 +76,14 @@ const SimulinkBuilderPage: React.FC = () => {
       }
       addBlock(type, x, y, defaultVal);
     },
-    [addBlock]
+    [addBlock],
   );
 
   const handleMoveBlock = useCallback(
     (id: number, x: number, y: number) => {
       moveBlock(id, x, y);
     },
-    [moveBlock]
+    [moveBlock],
   );
 
   const openModal = useCallback(
@@ -94,7 +94,7 @@ const SimulinkBuilderPage: React.FC = () => {
         setTempValue(block.value);
       }
     },
-    [blocks]
+    [blocks],
   );
 
   const closeModal = useCallback(() => {
@@ -120,11 +120,11 @@ const SimulinkBuilderPage: React.FC = () => {
     (
       fromId: number,
       toId: number,
-      direction: "left" | "right" | "top" | "bottom"
+      direction: "left" | "right" | "top" | "bottom",
     ) => {
       addConnection(fromId, toId, direction);
     },
-    [addConnection]
+    [addConnection],
   );
 
   const exportDiagram = useCallback(() => {
@@ -164,6 +164,21 @@ const SimulinkBuilderPage: React.FC = () => {
     fileInputRef.current?.click();
   }, []);
 
+  // Add this helper function first
+  const computeDirection = (
+    fromPos: { x: number; y: number },
+    toPos: { x: number; y: number },
+  ): "left" | "right" | "top" | "bottom" => {
+    const dx = toPos.x - fromPos.x;
+    const dy = toPos.y - fromPos.y;
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx > 0 ? "right" : "left";
+    } else {
+      return dy > 0 ? "bottom" : "top";
+    }
+  };
+
   const handleFileImport = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -186,54 +201,71 @@ const SimulinkBuilderPage: React.FC = () => {
             return;
           }
 
+          // IMPORTANT: Clear first to reset idCounter
           clearBlocks();
 
           const idMap: Record<number, number> = {};
-          const positions = new Map<number, { x: number; y: number }>();
+          const positionMap: Record<number, { x: number; y: number }> = {};
 
-          // Recursively import blocks with nested subsystems
-          const importBlocks = (blockList: ExportBlockData[]) => {
-            for (const blockData of blockList) {
-              const { id, type, x, y, value, subsystemData } = blockData;
-              const newId = addBlock(type, x, y, value);
-              idMap[id] = newId;
-              positions.set(id, { x, y });
+          console.log("=== Starting Import ===");
+          console.log("Blocks to import:", data.blocks);
 
-              // If it's a subsystem with nested data, import that too
-              if (type === "Subsystem" && subsystemData) {
-                const nestedSubsystemData: SubsystemData = {
-                  inputPorts: subsystemData.inputPorts,
-                  outputPorts: subsystemData.outputPorts,
-                  blocks: subsystemData.blocks,
-                  connections: subsystemData.connections,
-                };
-                updateSubsystem(newId, nestedSubsystemData);
-              }
+          // Step 1: Add all blocks
+          for (const blockData of data.blocks) {
+            const { id, type, x, y, value, subsystemData } = blockData;
+
+            const newId = addBlock(type, x, y, value);
+            idMap[id] = newId;
+            positionMap[id] = { x, y };
+
+            console.log(
+              `Block added: ${type} | Old ID: ${id} → New ID: ${newId} | Pos: (${x}, ${y})`,
+            );
+
+            // Handle subsystem
+            if (type === "Subsystem" && subsystemData) {
+              updateSubsystem(newId, subsystemData);
+              console.log(`Subsystem ${newId} updated with nested data`);
             }
-          };
-
-          importBlocks(data.blocks);
-
-          // Add connections (top level)
-          for (const conn of data.connections) {
-            const fromNew = idMap[conn.from];
-            const toNew = idMap[conn.to];
-            if (fromNew === undefined || toNew === undefined) continue;
-            addConnection(fromNew, toNew, conn.direction);
           }
 
-          alert("Diagram imported successfully!");
+          console.log("ID Mapping:", idMap);
+
+          // Step 2: Add connections
+          console.log("Connections to create:", data.connections);
+
+          for (const conn of data.connections) {
+            const fromNewId = idMap[conn.from];
+            const toNewId = idMap[conn.to];
+
+            console.log(
+              `Mapping connection: ${conn.from} → ${conn.to} = ${fromNewId} → ${toNewId}`,
+            );
+
+            if (fromNewId === undefined || toNewId === undefined) {
+              console.error(`❌ Connection failed: IDs not in map`);
+              continue;
+            }
+
+            const direction = conn.direction || "right";
+            addConnection(fromNewId, toNewId, direction);
+            console.log(
+              `✓ Connection created: ${fromNewId} → ${toNewId} (${direction})`,
+            );
+          }
+
+          console.log("=== Import Complete ===");
+          alert("✓ Diagram imported successfully!");
         } catch (err) {
-          alert("Failed to parse JSON file. Please check the format.");
-          console.error(err);
+          alert("Failed to parse JSON file. Check console for details.");
+          console.error("Import error:", err);
         }
       };
       reader.readAsText(file);
       e.target.value = "";
     },
-    [blocks, clearBlocks, addBlock, addConnection, updateSubsystem]
+    [blocks, clearBlocks, addBlock, addConnection, updateSubsystem],
   );
-
   const sendToBackend = useCallback(async () => {
     if (blocks.length === 0) {
       alert("Please add some blocks to simulate");
@@ -274,7 +306,7 @@ const SimulinkBuilderPage: React.FC = () => {
     // }
 
     alert(
-      "Diagram structure ready for backend!\nCheck console for JSON structure."
+      "Diagram structure ready for backend!\nCheck console for JSON structure.",
     );
   }, [blocks, connections]);
 
@@ -286,7 +318,7 @@ const SimulinkBuilderPage: React.FC = () => {
     (from: number, to: number) => {
       deleteConnection(from, to);
     },
-    [deleteConnection]
+    [deleteConnection],
   );
 
   const openSubsystem = useCallback((id: number) => {
@@ -304,7 +336,7 @@ const SimulinkBuilderPage: React.FC = () => {
         closeSubsystem();
       }
     },
-    [editingSubsystemId, updateSubsystem, closeSubsystem]
+    [editingSubsystemId, updateSubsystem, closeSubsystem],
   );
 
   return (

@@ -33,6 +33,13 @@ const SubsystemModal: React.FC<SubsystemModalProps> = ({
   const [tempValue, setTempValue] = useState("");
   const [hasLoaded, setHasLoaded] = useState(false);
 
+   // Reset hasLoaded when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setHasLoaded(false);
+    }
+  }, [isOpen]);
+
   // Load initial data when modal opens
   useEffect(() => {
     if (isOpen && !hasLoaded) {
@@ -47,6 +54,7 @@ const SubsystemModal: React.FC<SubsystemModalProps> = ({
     }
   }, [isOpen, initialData, clearBlocks, addBlock, addConnection, hasLoaded]);
 
+  
   const handleDropBlock = useCallback(
     (type: string, x: number, y: number) => {
       let defaultVal = "";

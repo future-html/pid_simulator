@@ -8,22 +8,35 @@ export function useBlocks() {
 
   const addBlock = useCallback(
     (type: string, x: number, y: number, defaultVal: string) => {
-      const id = ++idCounter.current; // atomic increment
-      setBlocks((prev) => [...prev, { id, type, x, y, value: defaultVal }]);
+      const id = ++idCounter.current;
+      const newBlock: BlockData = {
+        id,
+        type,
+        x,
+        y,
+        value: defaultVal,
+        subsystemData: type === "Subsystem" ? {
+          inputPorts: ["In1"],
+          outputPorts: ["Out1"],
+          blocks: [],
+          connections: [],
+        } : undefined,
+      };
+      setBlocks((prev) => [...prev, newBlock]);
       return id;
     },
-    [],
+    []
   );
 
   const addConnection = useCallback(
     (
       from: number,
       to: number,
-      direction: "left" | "right" | "top" | "bottom",
+      direction: "left" | "right" | "top" | "bottom"
     ) => {
       setConnections((prev) => [...prev, { from, to, direction }]);
     },
-    [],
+    []
   );
 
   const moveBlock = useCallback((id: number, x: number, y: number) => {
@@ -42,28 +55,24 @@ export function useBlocks() {
   const clearBlocks = useCallback(() => {
     setBlocks([]);
     setConnections([]);
-    // Optional: reset counter if you want fresh IDs after clear
-    // idCounter.current = 0;
+    idCounter.current = 0; // RESET counter for fresh IDs
   }, []);
 
   const deleteConnection = useCallback((from: number, to: number) => {
     setConnections((prev) =>
-      prev.filter((c) => !(c.from === from && c.to === to)),
+      prev.filter((c) => !(c.from === from && c.to === to))
     );
   }, []);
 
-
-  // inside useBlocks
-const updateSubsystem = useCallback((id: number, subsystemData: SubsystemData) => {
-  setBlocks((prev) =>
-    prev.map((b) =>
-      b.id === id && b.type === 'Subsystem'
-        ? { ...b, subsystemData }
-        : b
-    )
-  );
-}, []);
-
+  const updateSubsystem = useCallback((id: number, subsystemData: SubsystemData) => {
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.id === id && b.type === "Subsystem"
+          ? { ...b, subsystemData }
+          : b
+      )
+    );
+  }, []);
 
   return {
     blocks,
@@ -75,6 +84,6 @@ const updateSubsystem = useCallback((id: number, subsystemData: SubsystemData) =
     deleteBlock,
     clearBlocks,
     deleteConnection,
-    updateSubsystem, // <-- add this line to return the new function
+    updateSubsystem,
   };
 }

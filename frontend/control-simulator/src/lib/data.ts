@@ -1,39 +1,7 @@
-// Dimensions shared across the app
-export const BLOCK_W = 100;
-export const BLOCK_H = 50;
+// lib/data.ts
 
-// Core component library
-export const componentLibrary = {
-  "Sources (Inputs)": [
-    { type: "Input", defaultVal: "In1", label: "Inport" },
-    { type: "Constant", defaultVal: "5", label: "Constant" },
-    { type: "Step", defaultVal: "", label: "Step" },
-  ],
-  "Math Operations": [
-    { type: "Sum", defaultVal: "+", label: "Sum" },
-    { type: "Gain", defaultVal: "K", label: "Gain" },
-    { type: "Product", defaultVal: "×", label: "Product" },
-    { type: "Divide", defaultVal: "÷", label: "Divide" },
-  ],
-  "Continuous (Dynamics)": [
-    { type: "Integrator", defaultVal: "1/s", label: "Integrator" },
-    { type: "Derivative", defaultVal: "ds/dt", label: "Derivative" },
-  ],
-  "Signal Routing": [
-    { type: "Multiplexer", defaultVal: "", label: "Mux" },
-    { type: "Demultiplexer", defaultVal: "", label: "Demux" },
-  ],
-  "Logic & Comparison": [
-    { type: "RelationalOp", defaultVal: "<=", label: "Relational Op" },
-    { type: "LogicalOp", defaultVal: "&&", label: "Logical Op" },
-  ],
-  "Sinks (Outputs)": [
-    { type: "Output", defaultVal: "Out1", label: "Outport" },
-    { type: "Scope", defaultVal: "", label: "Scope" },
-    { type: "Stop", defaultVal: "", label: "Stop Sim" },
-  ],
-  Subsystems: [{ type: "Subsystem", defaultVal: "Sub1", label: "Subsystem" }],
-};
+export const BLOCK_W = 80;
+export const BLOCK_H = 40;
 
 export interface BlockData {
   id: number;
@@ -46,5 +14,32 @@ export interface BlockData {
 export interface ConnectionData {
   from: number;
   to: number;
-  direction: "left" | "right" | "top" | "bottom";
+  direction: 'left' | 'right' | 'top' | 'bottom';
 }
+
+export const componentLibrary = {
+  Sources: [
+    { type: 'Input', label: 'Inport', defaultVal: 'In1' },
+    { type: 'Step', label: 'Step', defaultVal: '' },
+    { type: 'Constant', label: 'Constant', defaultVal: '0' },
+  ],
+  Sinks: [
+    { type: 'Scope', label: 'Scope', defaultVal: '' },
+    { type: 'StopSimulation', label: 'Stop Simulation', defaultVal: '' },
+    { type: 'Outport', label: 'Outport', defaultVal: 'Out1' },
+  ],
+  Continuous: [
+    { type: 'Integrator', label: 'Integrator', defaultVal: '1/s' },
+    { type: 'IntegratorLimited', label: 'Integrator Limited', defaultVal: '1/s' },
+  ],
+  MathOperations: [
+    { type: 'Sum', label: 'Sum', defaultVal: '++' },
+    { type: 'Gain', label: 'Gain', defaultVal: '1' },
+  ],
+  Logic: [
+    { type: 'RelationalOp', label: 'Relational Operator', defaultVal: '<=' },
+  ],
+  Subsystems: [
+    { type: 'Subsystem', label: 'Subsystem', defaultVal: 'Subsystem' },
+  ],
+};

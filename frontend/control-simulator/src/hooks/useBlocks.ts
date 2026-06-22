@@ -46,6 +46,13 @@ export function useBlocks() {
     // idCounter.current = 0;
   }, []);
 
+  const deleteConnection = useCallback((from: number, to: number) => {
+    setConnections((prev) =>
+      prev.filter((c) => !(c.from === from && c.to === to)),
+    );
+  }, []);
+
+
   return {
     blocks,
     connections,
@@ -55,5 +62,6 @@ export function useBlocks() {
     updateBlockValue,
     deleteBlock,
     clearBlocks,
+    deleteConnection,
   };
 }

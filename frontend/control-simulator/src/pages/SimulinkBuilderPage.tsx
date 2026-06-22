@@ -17,6 +17,7 @@ const SimulinkBuilderPage: React.FC = () => {
     addConnection,
     deleteBlock,
     clearBlocks,
+    deleteConnection,
   } = useBlocks();
 
   const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
@@ -228,6 +229,13 @@ const SimulinkBuilderPage: React.FC = () => {
     if (window.confirm("Clear all blocks?")) clearBlocks();
   }, [clearBlocks]);
 
+  const handleDeleteConnection = useCallback(
+    (from: number, to: number) => {
+      deleteConnection(from, to);
+    },
+    [deleteConnection],
+  );
+
   // --- New: add connected block from a handle ---
   const handleAddConnectedBlock = useCallback(
     (
@@ -286,6 +294,7 @@ const SimulinkBuilderPage: React.FC = () => {
         onMoveBlock={handleMoveBlock}
         onBlockClick={openModal}
         onConnect={handleConnect} // <- new prop
+        onDeleteConnection={handleDeleteConnection}
       />
       {editingBlockId !== null && (
         <EditModal

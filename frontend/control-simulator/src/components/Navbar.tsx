@@ -6,10 +6,17 @@ interface NavbarProps {
   onExport: () => void;
   onSendBackend: () => void;
   onClear: () => void;
+  onImport: () => void;          // new prop
   hasBlocks: boolean;
 }
 
-const Navbar: React.FC<NavbarProps> = ({ onExport, onSendBackend, onClear, hasBlocks }) => {
+const Navbar: React.FC<NavbarProps> = ({
+  onExport,
+  onSendBackend,
+  onClear,
+  onImport,
+  hasBlocks,
+}) => {
   return (
     <div className="border-b border-gray-700 shadow-lg shadow-black/20 overflow-x-auto">
       <div className="flex items-center gap-4 p-4">
@@ -29,6 +36,13 @@ const Navbar: React.FC<NavbarProps> = ({ onExport, onSendBackend, onClear, hasBl
         </div>
 
         <div className="flex gap-2 border-l border-gray-700 pl-4">
+          <button
+            onClick={onImport}
+            className="px-3 py-2 bg-green-500 text-white text-sm rounded hover:bg-green-600 transition font-medium"
+            title="Import diagram from JSON"
+          >
+            📂 Import
+          </button>
           <button
             onClick={onExport}
             className="px-3 py-2 bg-cyan-400 text-white text-sm rounded hover:bg-cyan-600 transition font-medium"

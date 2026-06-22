@@ -1,13 +1,14 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { type BlockData, type ConnectionData } from "../lib/data";
 
 export function useBlocks() {
   const [blocks, setBlocks] = useState<BlockData[]>([]);
   const [connections, setConnections] = useState<ConnectionData[]>([]);
+  const idCounter = useRef(0);
 
   const addBlock = useCallback(
     (type: string, x: number, y: number, defaultVal: string) => {
-      const id = Date.now();
+      const id = ++idCounter.current; // atomic increment
       setBlocks((prev) => [...prev, { id, type, x, y, value: defaultVal }]);
       return id;
     },
@@ -41,6 +42,8 @@ export function useBlocks() {
   const clearBlocks = useCallback(() => {
     setBlocks([]);
     setConnections([]);
+    // Optional: reset counter if you want fresh IDs after clear
+    // idCounter.current = 0;
   }, []);
 
   return {

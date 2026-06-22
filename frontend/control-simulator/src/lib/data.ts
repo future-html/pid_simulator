@@ -2,19 +2,28 @@
 
 export const BLOCK_W = 80;
 export const BLOCK_H = 40;
-
 export interface BlockData {
   id: number;
   type: string;
   x: number;
   y: number;
   value: string;
+  subsystemData?: SubsystemData; // present only for type === 'Subsystem'
+}
+
+export interface SubsystemData {
+  inputPorts: string[];   // e.g. ['In1', 'In2']
+  outputPorts: string[];  // e.g. ['Out1']
+  blocks: BlockData[];
+  connections: ConnectionData[];
 }
 
 export interface ConnectionData {
   from: number;
   to: number;
   direction: 'left' | 'right' | 'top' | 'bottom';
+  fromPortIndex?: number; // output port index (for subsystems)
+  toPortIndex?: number;   // input port index (for subsystems)
 }
 
 export const componentLibrary = {

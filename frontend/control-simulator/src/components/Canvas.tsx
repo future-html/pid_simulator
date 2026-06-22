@@ -1,7 +1,12 @@
 // components/Canvas.tsx
-import React, { useState, forwardRef, useEffect, useRef } from 'react';
-import CanvasBlock from './CanvasBlock';
-import { BLOCK_W, BLOCK_H, type BlockData, type ConnectionData } from '../lib/data';
+import React, { useState, forwardRef, useEffect, useRef } from "react";
+import CanvasBlock from "./CanvasBlock";
+import {
+  BLOCK_W,
+  BLOCK_H,
+  type BlockData,
+  type ConnectionData,
+} from "../lib/data";
 
 interface CanvasProps {
   blocks: BlockData[];
@@ -9,7 +14,12 @@ interface CanvasProps {
   onDropBlock: (type: string, x: number, y: number) => void;
   onMoveBlock: (id: number, x: number, y: number) => void;
   onBlockClick: (id: number) => void;
-  onConnect: (fromId: number, toId: number, direction: 'left' | 'right' | 'top' | 'bottom') => void;
+  onSubsystemClick?: (id: number) => void;
+  onConnect: (
+    fromId: number,
+    toId: number,
+    direction: "left" | "right" | "top" | "bottom",
+  ) => void;
   onDeleteConnection: (from: number, to: number) => void;
 }
 
@@ -17,7 +27,7 @@ interface CanvasProps {
 function getConnectionPoints(
   fromBlock: BlockData,
   toBlock: BlockData,
-  direction: 'left' | 'right' | 'top' | 'bottom'
+  direction: "left" | "right" | "top" | "bottom",
 ): string {
   const fromCX = fromBlock.x + BLOCK_W / 2;
   const fromCY = fromBlock.y + BLOCK_H / 2;
@@ -26,36 +36,48 @@ function getConnectionPoints(
   const gap = 20;
 
   switch (direction) {
-    case 'right':
+    case "right":
       return `${fromBlock.x + BLOCK_W},${fromCY} ${fromBlock.x + BLOCK_W + gap},${fromCY} ${fromBlock.x + BLOCK_W + gap},${toCY} ${toBlock.x},${toCY}`;
-    case 'left':
+    case "left":
       return `${fromBlock.x},${fromCY} ${fromBlock.x - gap},${fromCY} ${fromBlock.x - gap},${toCY} ${toBlock.x + BLOCK_W},${toCY}`;
-    case 'bottom':
+    case "bottom":
       return `${fromCX},${fromBlock.y + BLOCK_H} ${fromCX},${fromBlock.y + BLOCK_H + gap} ${toCX},${fromBlock.y + BLOCK_H + gap} ${toCX},${toBlock.y}`;
-    case 'top':
+    case "top":
       return `${fromCX},${fromBlock.y} ${fromCX},${fromBlock.y - gap} ${toCX},${fromBlock.y - gap} ${toCX},${toBlock.y + BLOCK_H}`;
     default:
-      return '';
+      return "";
   }
 }
 
 const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
   (
-    { blocks, connections, onDropBlock, onMoveBlock, onBlockClick, onConnect, onDeleteConnection },
-    ref
+    {
+      blocks,
+      connections,
+      onDropBlock,
+      onMoveBlock,
+      onBlockClick,
+      onConnect,
+      onDeleteConnection,
+      onSubsystemClick, // new prop for opening modal
+    },
+    ref,
   ) => {
     const canvasRef = useRef<HTMLDivElement>(null);
 
     // State for the connection being drawn
     const [drawing, setDrawing] = useState<{
       fromId: number;
-      direction: 'left' | 'right' | 'top' | 'bottom';
+      direction: "left" | "right" | "top" | "bottom";
       endX: number;
       endY: number;
     } | null>(null);
 
     // Start drawing when a + handle is clicked
-    const handleAddHandleClick = (id: number, direction: 'left' | 'right' | 'top' | 'bottom') => {
+    const handleAddHandleClick = (
+      id: number,
+      direction: "left" | "right" | "top" | "bottom",
+    ) => {
       const block = blocks.find((b) => b.id === id);
       if (!block) return;
       setDrawing({
@@ -108,12 +130,12 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
         setDrawing(null);
       };
 
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
 
       return () => {
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
       };
     }, [drawing, blocks, onConnect]);
 
@@ -122,9 +144,9 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
       e.preventDefault();
       const canvas = e.currentTarget;
       const canvasRect = canvas.getBoundingClientRect();
-      const rawType = e.dataTransfer.getData('text/plain');
+      const rawType = e.dataTransfer.getData("text/plain");
 
-      if (rawType && !rawType.startsWith('move-')) {
+      if (rawType && !rawType.startsWith("move-")) {
         // New block from palette
         const x = e.clientX - canvasRect.left - BLOCK_W / 2;
         const y = e.clientY - canvasRect.top - BLOCK_H / 2;
@@ -132,11 +154,11 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
         return;
       }
 
-      if (rawType.startsWith('move-')) {
+      if (rawType.startsWith("move-")) {
         // Moving an existing block
-        const id = parseInt(rawType.replace('move-', ''));
-        const offsetX = parseInt(e.dataTransfer.getData('offsetX') || '0');
-        const offsetY = parseInt(e.dataTransfer.getData('offsetY') || '0');
+        const id = parseInt(rawType.replace("move-", ""));
+        const offsetX = parseInt(e.dataTransfer.getData("offsetX") || "0");
+        const offsetY = parseInt(e.dataTransfer.getData("offsetY") || "0");
         const newX = e.clientX - canvasRect.left - offsetX;
         const newY = e.clientY - canvasRect.top - offsetY;
         onMoveBlock(id, newX, newY);
@@ -156,21 +178,25 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
       const gap = 20;
 
       switch (drawing.direction) {
-        case 'right':
+        case "right":
           return `${fromBlock.x + BLOCK_W},${fromCY} ${fromBlock.x + BLOCK_W + gap},${fromCY} ${fromBlock.x + BLOCK_W + gap},${toY} ${toX},${toY}`;
-        case 'left':
+        case "left":
           return `${fromBlock.x},${fromCY} ${fromBlock.x - gap},${fromCY} ${fromBlock.x - gap},${toY} ${toX},${toY}`;
-        case 'bottom':
+        case "bottom":
           return `${fromCX},${fromBlock.y + BLOCK_H} ${fromCX},${fromBlock.y + BLOCK_H + gap} ${toX},${fromBlock.y + BLOCK_H + gap} ${toX},${toY}`;
-        case 'top':
+        case "top":
           return `${fromCX},${fromBlock.y} ${fromCX},${fromBlock.y - gap} ${toX},${fromBlock.y - gap} ${toX},${toY}`;
         default:
-          return '';
+          return "";
       }
     };
 
     // Click on a connection → delete it
-    const handleConnectionClick = (from: number, to: number, e: React.MouseEvent) => {
+    const handleConnectionClick = (
+      from: number,
+      to: number,
+      e: React.MouseEvent,
+    ) => {
       e.stopPropagation();
       onDeleteConnection(from, to);
     };
@@ -179,7 +205,7 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
       <div
         ref={(node) => {
           // Forward the ref to the parent, and store it locally
-          if (typeof ref === 'function') ref(node);
+          if (typeof ref === "function") ref(node);
           else if (ref) ref.current = node;
           canvasRef.current = node;
         }}
@@ -194,16 +220,31 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
             {...block}
             onClick={onBlockClick}
             onAddHandleClick={handleAddHandleClick}
+            onSubsystemClick={onSubsystemClick} // new prop
           />
         ))}
 
         {/* SVG overlay for connections and preview */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
           <defs>
-            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <marker
+              id="arrowhead"
+              markerWidth="10"
+              markerHeight="7"
+              refX="9"
+              refY="3.5"
+              orient="auto"
+            >
               <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
             </marker>
-            <marker id="preview-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <marker
+              id="preview-arrow"
+              markerWidth="10"
+              markerHeight="7"
+              refX="9"
+              refY="3.5"
+              orient="auto"
+            >
               <polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa" />
             </marker>
           </defs>
@@ -213,7 +254,11 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
             const fromBlock = blocks.find((b) => b.id === conn.from);
             const toBlock = blocks.find((b) => b.id === conn.to);
             if (!fromBlock || !toBlock) return null;
-            const points = getConnectionPoints(fromBlock, toBlock, conn.direction);
+            const points = getConnectionPoints(
+              fromBlock,
+              toBlock,
+              conn.direction,
+            );
             return (
               <polyline
                 key={`conn-${conn.from}-${conn.to}`}
@@ -231,7 +276,7 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
           {/* Preview line while drawing */}
           {drawing && (
             <polyline
-              points={getPreviewPoints() || ''}
+              points={getPreviewPoints() || ""}
               fill="none"
               stroke="#60a5fa"
               strokeWidth="2"
@@ -245,17 +290,21 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
         {blocks.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-gray-500 font-medium pointer-events-none select-none">
             <div className="text-center">
-              <div className="text-xl text-gray-400 mb-2">📦 Drag components from the library above</div>
+              <div className="text-xl text-gray-400 mb-2">
+                📦 Drag components from the library above
+              </div>
               <div className="text-sm text-gray-500">
-                Or hover over a block and click the <span className="font-mono">+</span> to connect it to another block
+                Or hover over a block and click the{" "}
+                <span className="font-mono">+</span> to connect it to another
+                block
               </div>
             </div>
           </div>
         )}
       </div>
     );
-  }
+  },
 );
 
-Canvas.displayName = 'Canvas';
+Canvas.displayName = "Canvas";
 export default Canvas;

@@ -1,9 +1,22 @@
+// components/SimulinkBuilderPage.tsx
 import React, { useState, useCallback, useRef } from "react";
 import Navbar from "../components/Navbar";
 import Canvas from "../components/Canvas";
 import EditModal from "../components/EditModal";
 import { useBlocks } from "../hooks/useBlocks";
-import { componentLibrary, BLOCK_W, BLOCK_H } from "../lib/data";
+import {
+  componentLibrary,
+  type SubsystemData,
+  type BlockData,
+} from "../lib/data";
+import SubsystemModal from "../components/SubsystemModal";
+
+interface ExportBlockData extends BlockData {
+  subsystemData?: SubsystemData & {
+    blocks: ExportBlockData[];
+    connections: any[];
+  };
+}
 
 const SimulinkBuilderPage: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -18,12 +31,39 @@ const SimulinkBuilderPage: React.FC = () => {
     deleteBlock,
     clearBlocks,
     deleteConnection,
+    updateSubsystem,
   } = useBlocks();
 
   const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
   const [tempValue, setTempValue] = useState("");
+  const [editingSubsystemId, setEditingSubsystemId] = useState<number | null>(
+    null
+  );
 
-  // --- New block from palette (navbar drag) still works ---
+  // Helper function to recursively build nested block structure
+  const buildNestedBlocks = (blockList: BlockData[]): ExportBlockData[] => {
+    return blockList.map((block) => {
+      const exportBlock: ExportBlockData = {
+        id: block.id,
+        type: block.type,
+        x: block.x,
+        y: block.y,
+        value: block.value,
+      };
+
+      // If it's a subsystem, include nested data
+      if (block.type === "Subsystem" && block.subsystemData) {
+        exportBlock.subsystemData = {
+          ...block.subsystemData,
+          blocks: buildNestedBlocks(block.subsystemData.blocks),
+          connections: block.subsystemData.connections,
+        };
+      }
+
+      return exportBlock;
+    });
+  };
+
   const handleDropBlock = useCallback(
     (type: string, x: number, y: number) => {
       let defaultVal = "";
@@ -36,14 +76,14 @@ const SimulinkBuilderPage: React.FC = () => {
       }
       addBlock(type, x, y, defaultVal);
     },
-    [addBlock],
+    [addBlock]
   );
 
   const handleMoveBlock = useCallback(
     (id: number, x: number, y: number) => {
       moveBlock(id, x, y);
     },
-    [moveBlock],
+    [moveBlock]
   );
 
   const openModal = useCallback(
@@ -54,7 +94,7 @@ const SimulinkBuilderPage: React.FC = () => {
         setTempValue(block.value);
       }
     },
-    [blocks],
+    [blocks]
   );
 
   const closeModal = useCallback(() => {
@@ -76,37 +116,40 @@ const SimulinkBuilderPage: React.FC = () => {
     }
   }, [editingBlockId, deleteBlock, closeModal]);
 
-  // We no longer need handleAddConnectedBlock – we'll pass addConnection directly
   const handleConnect = useCallback(
     (
       fromId: number,
       toId: number,
-      direction: "left" | "right" | "top" | "bottom",
+      direction: "left" | "right" | "top" | "bottom"
     ) => {
       addConnection(fromId, toId, direction);
     },
-    [addConnection],
+    [addConnection]
   );
 
   const exportDiagram = useCallback(() => {
+    const nestedBlocks = buildNestedBlocks(blocks);
+
     const diagram = {
       metadata: {
         name: "Simulink Diagram",
         createdAt: new Date().toISOString(),
         blockCount: blocks.length,
+        version: "1.0",
       },
-      blocks: blocks.map((block) => ({
-        id: block.id,
-        type: block.type,
-        position: { x: block.x, y: block.y },
-        parameters: { value: block.value, label: `${block.type}_${block.id}` },
+      blocks: nestedBlocks,
+      connections: connections.map((conn) => ({
+        from: conn.from,
+        to: conn.to,
+        direction: conn.direction,
       })),
-      connections: blocks.slice(0, -1).map((block, i) => ({
-        from: { blockId: block.id, port: 0 },
-        to: { blockId: blocks[i + 1].id, port: 0 },
-      })),
-      simulationParams: { startTime: 0, endTime: 10, timeStep: 0.01 },
+      simulationParams: {
+        startTime: 0,
+        endTime: 10,
+        timeStep: 0.01,
+      },
     };
+
     const dataStr = JSON.stringify(diagram, null, 2);
     const dataBlob = new Blob([dataStr], { type: "application/json" });
     const url = URL.createObjectURL(dataBlob);
@@ -115,7 +158,7 @@ const SimulinkBuilderPage: React.FC = () => {
     link.download = "simulink_diagram.json";
     link.click();
     alert("Diagram exported as simulink_diagram.json");
-  }, [blocks]);
+  }, [blocks, connections]);
 
   const handleImport = useCallback(() => {
     fileInputRef.current?.click();
@@ -131,13 +174,11 @@ const SimulinkBuilderPage: React.FC = () => {
         try {
           const data = JSON.parse(event.target?.result as string);
 
-          // Validate structure
           if (!data.blocks || !data.connections) {
             alert("Invalid file format: missing 'blocks' or 'connections'.");
             return;
           }
 
-          // Confirm if canvas is not empty
           if (
             blocks.length > 0 &&
             !window.confirm("Import will replace all current blocks. Continue?")
@@ -145,46 +186,40 @@ const SimulinkBuilderPage: React.FC = () => {
             return;
           }
 
-          // Clear existing diagram
           clearBlocks();
 
-          // Map old IDs → new IDs
           const idMap: Record<number, number> = {};
           const positions = new Map<number, { x: number; y: number }>();
 
-          // Add all blocks from the file
-          for (const blockData of data.blocks) {
-            const { id, type, position, parameters } = blockData;
-            const value = parameters?.value || "";
-            const newId = addBlock(type, position.x, position.y, value);
-            idMap[id] = newId;
-            positions.set(id, { x: position.x, y: position.y });
-          }
+          // Recursively import blocks with nested subsystems
+          const importBlocks = (blockList: ExportBlockData[]) => {
+            for (const blockData of blockList) {
+              const { id, type, x, y, value, subsystemData } = blockData;
+              const newId = addBlock(type, x, y, value);
+              idMap[id] = newId;
+              positions.set(id, { x, y });
 
-          // Add connections (computing direction from positions)
-          for (const conn of data.connections) {
-            const fromOld = conn.from.blockId;
-            const toOld = conn.to.blockId;
-            const fromNew = idMap[fromOld];
-            const toNew = idMap[toOld];
-            if (fromNew === undefined || toNew === undefined) continue;
-
-            const fromPos = positions.get(fromOld);
-            const toPos = positions.get(toOld);
-            if (!fromPos || !toPos) continue;
-
-            // Determine direction based on relative positions
-            let direction: "left" | "right" | "top" | "bottom";
-            const dx = toPos.x - fromPos.x;
-            const dy = toPos.y - fromPos.y;
-
-            if (Math.abs(dx) >= Math.abs(dy)) {
-              direction = dx > 0 ? "right" : "left";
-            } else {
-              direction = dy > 0 ? "bottom" : "top";
+              // If it's a subsystem with nested data, import that too
+              if (type === "Subsystem" && subsystemData) {
+                const nestedSubsystemData: SubsystemData = {
+                  inputPorts: subsystemData.inputPorts,
+                  outputPorts: subsystemData.outputPorts,
+                  blocks: subsystemData.blocks,
+                  connections: subsystemData.connections,
+                };
+                updateSubsystem(newId, nestedSubsystemData);
+              }
             }
+          };
 
-            addConnection(fromNew, toNew, direction);
+          importBlocks(data.blocks);
+
+          // Add connections (top level)
+          for (const conn of data.connections) {
+            const fromNew = idMap[conn.from];
+            const toNew = idMap[conn.to];
+            if (fromNew === undefined || toNew === undefined) continue;
+            addConnection(fromNew, toNew, conn.direction);
           }
 
           alert("Diagram imported successfully!");
@@ -194,9 +229,9 @@ const SimulinkBuilderPage: React.FC = () => {
         }
       };
       reader.readAsText(file);
-      e.target.value = ""; // reset input
+      e.target.value = "";
     },
-    [blocks, clearBlocks, addBlock, addConnection],
+    [blocks, clearBlocks, addBlock, addConnection, updateSubsystem]
   );
 
   const sendToBackend = useCallback(async () => {
@@ -204,26 +239,44 @@ const SimulinkBuilderPage: React.FC = () => {
       alert("Please add some blocks to simulate");
       return;
     }
+
+    const nestedBlocks = buildNestedBlocks(blocks);
+
     const diagram = {
-      blocks: blocks.map((b) => ({
-        id: b.id,
-        type: b.type,
-        position: { x: b.x, y: b.y },
-        value: b.value,
+      blocks: nestedBlocks,
+      connections: connections.map((conn) => ({
+        from: conn.from,
+        to: conn.to,
+        direction: conn.direction,
       })),
-      connections: blocks
-        .slice(0, -1)
-        .map((block, i) => ({ from: block.id, to: blocks[i + 1].id })),
       metadata: {
         totalBlocks: blocks.length,
         timestamp: new Date().toISOString(),
+        version: "1.0",
       },
     };
+
     console.log("Ready to send to backend:", diagram);
+
+    // Uncomment to actually send to backend
+    // try {
+    //   const response = await fetch("http://your-backend/api/simulate", {
+    //     method: "POST",
+    //     headers: { "Content-Type": "application/json" },
+    //     body: JSON.stringify(diagram),
+    //   });
+    //   const result = await response.json();
+    //   console.log("Backend response:", result);
+    //   alert("Simulation submitted successfully!");
+    // } catch (error) {
+    //   console.error("Error sending to backend:", error);
+    //   alert("Failed to send to backend");
+    // }
+
     alert(
-      "Diagram structure ready for backend!\nCheck console for JSON structure.",
+      "Diagram structure ready for backend!\nCheck console for JSON structure."
     );
-  }, [blocks]);
+  }, [blocks, connections]);
 
   const handleClear = useCallback(() => {
     if (window.confirm("Clear all blocks?")) clearBlocks();
@@ -233,41 +286,25 @@ const SimulinkBuilderPage: React.FC = () => {
     (from: number, to: number) => {
       deleteConnection(from, to);
     },
-    [deleteConnection],
+    [deleteConnection]
   );
 
-  // --- New: add connected block from a handle ---
-  const handleAddConnectedBlock = useCallback(
-    (
-      sourceId: number,
-      direction: "left" | "right" | "top" | "bottom",
-      type: string,
-    ) => {
-      const sourceBlock = blocks.find((b) => b.id === sourceId);
-      if (!sourceBlock) return;
+  const openSubsystem = useCallback((id: number) => {
+    setEditingSubsystemId(id);
+  }, []);
 
-      let defaultVal = "";
-      for (const category of Object.values(componentLibrary)) {
-        const found = category.find((i) => i.type === type);
-        if (found) {
-          defaultVal = found.defaultVal;
-          break;
-        }
+  const closeSubsystem = useCallback(() => {
+    setEditingSubsystemId(null);
+  }, []);
+
+  const saveSubsystem = useCallback(
+    (subsystemData: SubsystemData) => {
+      if (editingSubsystemId !== null) {
+        updateSubsystem(editingSubsystemId, subsystemData);
+        closeSubsystem();
       }
-
-      // Calculate position based on direction (gap of 30px)
-      const gap = 30;
-      let newX = sourceBlock.x,
-        newY = sourceBlock.y;
-      if (direction === "right") newX = sourceBlock.x + BLOCK_W + gap;
-      else if (direction === "left") newX = sourceBlock.x - BLOCK_W - gap;
-      else if (direction === "bottom") newY = sourceBlock.y + BLOCK_H + gap;
-      else if (direction === "top") newY = sourceBlock.y - BLOCK_H - gap;
-
-      const newId = addBlock(type, newX, newY, defaultVal);
-      addConnection(sourceId, newId, direction); // ← pass direction
     },
-    [blocks, addBlock, addConnection],
+    [editingSubsystemId, updateSubsystem, closeSubsystem]
   );
 
   return (
@@ -284,7 +321,7 @@ const SimulinkBuilderPage: React.FC = () => {
         onSendBackend={sendToBackend}
         onClear={handleClear}
         hasBlocks={blocks.length > 0}
-        onImport={handleImport} // <-- new prop
+        onImport={handleImport}
       />
       <Canvas
         ref={canvasRef}
@@ -293,8 +330,9 @@ const SimulinkBuilderPage: React.FC = () => {
         onDropBlock={handleDropBlock}
         onMoveBlock={handleMoveBlock}
         onBlockClick={openModal}
-        onConnect={handleConnect} // <- new prop
+        onConnect={handleConnect}
         onDeleteConnection={handleDeleteConnection}
+        onSubsystemClick={openSubsystem}
       />
       {editingBlockId !== null && (
         <EditModal
@@ -303,6 +341,22 @@ const SimulinkBuilderPage: React.FC = () => {
           onSave={saveValue}
           onCancel={closeModal}
           onDelete={deleteCurrentBlock}
+        />
+      )}
+
+      {editingSubsystemId !== null && (
+        <SubsystemModal
+          isOpen={true}
+          initialData={
+            blocks.find((b) => b.id === editingSubsystemId)?.subsystemData || {
+              inputPorts: ["In1"],
+              outputPorts: ["Out1"],
+              blocks: [],
+              connections: [],
+            }
+          }
+          onSave={saveSubsystem}
+          onClose={closeSubsystem}
         />
       )}
     </div>

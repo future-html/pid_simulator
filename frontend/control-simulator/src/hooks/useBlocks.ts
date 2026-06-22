@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { type BlockData, type ConnectionData } from "../lib/data";
+import { type BlockData, type ConnectionData, type SubsystemData } from "../lib/data";
 
 export function useBlocks() {
   const [blocks, setBlocks] = useState<BlockData[]>([]);
@@ -53,6 +53,18 @@ export function useBlocks() {
   }, []);
 
 
+  // inside useBlocks
+const updateSubsystem = useCallback((id: number, subsystemData: SubsystemData) => {
+  setBlocks((prev) =>
+    prev.map((b) =>
+      b.id === id && b.type === 'Subsystem'
+        ? { ...b, subsystemData }
+        : b
+    )
+  );
+}, []);
+
+
   return {
     blocks,
     connections,
@@ -63,5 +75,6 @@ export function useBlocks() {
     deleteBlock,
     clearBlocks,
     deleteConnection,
+    updateSubsystem, // <-- add this line to return the new function
   };
 }

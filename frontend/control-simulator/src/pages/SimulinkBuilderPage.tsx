@@ -32,6 +32,7 @@ const SimulinkBuilderPage: React.FC = () => {
     clearBlocks,
     deleteConnection,
     updateSubsystem,
+    updateBlockLabel, // NEW: hook for updating block labels
   } = useBlocks();
 
   const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
@@ -362,6 +363,7 @@ const SimulinkBuilderPage: React.FC = () => {
         onDropBlock={handleDropBlock}
         onMoveBlock={handleMoveBlock}
         onBlockClick={openModal}
+        onLabelChange={updateBlockLabel} // ADD THIS - pass the new hook
         onConnect={handleConnect}
         onDeleteConnection={handleDeleteConnection}
         onSubsystemClick={openSubsystem}

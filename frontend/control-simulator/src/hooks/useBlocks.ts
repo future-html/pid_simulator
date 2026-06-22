@@ -15,6 +15,7 @@ export function useBlocks() {
         x,
         y,
         value: defaultVal,
+        label: `${type}_${id}`, // NEW: default label
         subsystemData: type === "Subsystem" ? {
           inputPorts: ["In1"],
           outputPorts: ["Out1"],
@@ -74,6 +75,11 @@ export function useBlocks() {
     );
   }, []);
 
+   const updateBlockLabel = useCallback((id: number, label: string) => {
+    setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, label } : b)));
+  }, []);
+
+
   return {
     blocks,
     connections,
@@ -81,6 +87,7 @@ export function useBlocks() {
     addConnection,
     moveBlock,
     updateBlockValue,
+    updateBlockLabel, 
     deleteBlock,
     clearBlocks,
     deleteConnection,

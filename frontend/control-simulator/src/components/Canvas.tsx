@@ -1,5 +1,10 @@
 // components/Canvas.tsx
-import React, { useState, forwardRef, useEffect, useRef } from "react";
+import React, {
+  useState,
+  forwardRef,
+  useEffect,
+  useRef,
+} from "react";
 import CanvasBlock from "./CanvasBlock";
 import {
   BLOCK_W,
@@ -14,6 +19,7 @@ interface CanvasProps {
   onDropBlock: (type: string, x: number, y: number) => void;
   onMoveBlock: (id: number, x: number, y: number) => void;
   onBlockClick: (id: number) => void;
+  onLabelChange?: (id: number, newLabel: string) => void; // NEW
   onSubsystemClick?: (id: number) => void;
   onConnect: (
     fromId: number,
@@ -60,6 +66,7 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
       onConnect,
       onDeleteConnection,
       onSubsystemClick, // new prop for opening modal
+      onLabelChange, // new prop for label changes
     },
     ref,
   ) => {
@@ -138,6 +145,8 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
         document.removeEventListener("mouseup", onMouseUp);
       };
     }, [drawing, blocks, onConnect]);
+
+    
 
     // Handle dropping new blocks or moving existing ones
     const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -220,7 +229,8 @@ const Canvas = forwardRef<HTMLDivElement, CanvasProps>(
             {...block}
             onClick={onBlockClick}
             onAddHandleClick={handleAddHandleClick}
-            onSubsystemClick={onSubsystemClick} // new prop
+            onSubsystemClick={onSubsystemClick}
+            onLabelChange={onLabelChange} // ADD THIS
           />
         ))}
 

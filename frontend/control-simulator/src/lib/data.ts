@@ -7,7 +7,8 @@ export interface BlockData {
   type: string;
   x: number;
   y: number;
-  value: string;
+  value: string;        // The parameter value
+  label?: string;       // The display name (NEW)
   subsystemData?: SubsystemData; // present only for type === 'Subsystem'
 }
 

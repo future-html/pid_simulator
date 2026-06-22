@@ -1,5 +1,5 @@
 // components/CanvasBlock.tsx
-import React from "react";
+import React, { useState } from "react";
 import BlockRenderer from "./BlockRenderer";
 import { BLOCK_W, BLOCK_H, type SubsystemData } from "../lib/data";
 
@@ -9,12 +9,14 @@ interface CanvasBlockProps {
   x: number;
   y: number;
   value: string;
+  label?: string;  // NEW PROP
   onClick: (id: number) => void;
   onAddHandleClick: (
     id: number,
     direction: "left" | "right" | "top" | "bottom"
   ) => void;
   onSubsystemClick?: (id: number) => void;
+  onLabelChange?: (id: number, newLabel: string) => void; // NEW PROP
   subsystemData?: SubsystemData;
 }
 
@@ -24,11 +26,16 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({
   x,
   y,
   value,
+  label,
   onClick,
   onAddHandleClick,
   onSubsystemClick,
+  onLabelChange,
   subsystemData,
 }) => {
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [editedLabel, setEditedLabel] = useState(label || `${type}_${id}`);
+
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", `move-${id}`);
     e.dataTransfer.setData("offsetX", e.nativeEvent.offsetX.toString());
@@ -36,6 +43,30 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({
   };
 
   const isSubsystem = type === "Subsystem";
+
+  // Handle label edit start
+  const handleLabelClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditingLabel(true);
+    setEditedLabel(label || `${type}_${id}`);
+  };
+
+  // Handle label save
+  const handleLabelSave = () => {
+    if (onLabelChange && editedLabel.trim()) {
+      onLabelChange(id, editedLabel.trim());
+    }
+    setIsEditingLabel(false);
+  };
+
+  // Handle keyboard events in input
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleLabelSave();
+    } else if (e.key === "Escape") {
+      setIsEditingLabel(false);
+    }
+  };
 
   return (
     <div
@@ -57,7 +88,7 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({
         subsystemData={subsystemData}
       />
 
-      {/* Input port indicators (blue squares on left) */}
+      {/* Input port indicators */}
       {isSubsystem && subsystemData?.inputPorts && (
         <div className="absolute left-0 top-0 h-full flex flex-col justify-around pointer-events-none">
           {subsystemData.inputPorts.map((_, idx) => {
@@ -75,7 +106,7 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({
         </div>
       )}
 
-      {/* Output port indicators (green squares on right) */}
+      {/* Output port indicators */}
       {isSubsystem && subsystemData?.outputPorts && (
         <div className="absolute right-0 top-0 h-full flex flex-col justify-around pointer-events-none">
           {subsystemData.outputPorts.map((_, idx) => {
@@ -118,14 +149,31 @@ const CanvasBlock: React.FC<CanvasBlockProps> = ({
         </button>
       </div>
 
-      {/* Value label below the block */}
+      {/* Editable Label (display name) - SEPARATE from value */}
       <div
-        className="absolute left-0 right-0 flex justify-center pointer-events-none select-none"
+        className="absolute left-0 right-0 flex justify-center pointer-events-auto select-none"
         style={{ top: BLOCK_H + 4 }}
       >
-        <span className="text-[10px] text-gray-300 bg-black/60 px-1.5 py-0.5 rounded whitespace-nowrap leading-tight">
-          {type}
-        </span>
+        {isEditingLabel ? (
+          <input
+            type="text"
+            autoFocus
+            value={editedLabel}
+            onChange={(e) => setEditedLabel(e.target.value)}
+            onBlur={handleLabelSave}
+            onKeyDown={handleKeyDown}
+            onClick={(e) => e.stopPropagation()}
+            className="w-24 px-1.5 py-0.5 text-[10px] bg-gray-900 text-white border border-blue-400 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 text-center"
+            placeholder="Label..."
+          />
+        ) : (
+          <span
+            onClick={handleLabelClick}
+            className="text-[10px] text-blue-300 bg-black/60 px-1.5 py-0.5 rounded whitespace-nowrap leading-tight cursor-text hover:bg-black/80 hover:text-blue-200 transition-colors"
+          >
+            {label || `${type}_${id}`}
+          </span>
+        )}
       </div>
     </div>
   );

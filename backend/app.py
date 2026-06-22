@@ -161,181 +161,135 @@ def create_user():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# --- ROUTES ใหม่สำหรับระบบ ABS SIMULATION (เพื่อส่งให้ React) ---
-
-@app.route('/api/simulate', methods=['POST'])
-def simulate_abs():
-    """
-    Endpoint สำหรับคำนวณสมการ ABS แบบ Dynamic ผ่าน POST Method
-    รับค่าพารามิเตอร์จาก JSON Body จากหน้าบ้าน (React)
-    """
+@app.route('/api/simulate/universal', methods=['POST'])
+def universal_simulate():
     try:
-        # 1. ดึงข้อมูล JSON จาก Body ของ POST Request
         data = request.get_json() or {}
-
-        # 2. รับค่าพารามิเตอร์จาก JSON (ถ้าไม่มีการส่งมา จะใช้ค่า Default ด้านหลัง)
-        mass = float(data.get('mass', 250.0))       # น้ำหนักตัวรถ (kg)
-        Tb_max = float(data.get('torque', 1200.0))   # แรงเบรคสูงสุด (Nm)
-        v_init = float(data.get('v_init', 30.0))    # ความเร็วเริ่มต้น (m/s)
-
-        # 3. ตั้งค่าโครงสร้างเชิงตัวเลข (Discrete Simulation Settings)
-        dt = 0.01          # ขนาดของ Step (10ms ต่อรอบ กำลังดีสำหรับกราฟเว็บ)
-        t_max = 3.0        # จำลองเหตุการณ์สูงสุด 3 วินาที
-        n_steps = int(t_max / dt)
-
-        # 4. พารามิเตอร์คงที่ของโมเดล ABS
-        J = 1.0            # ความเฉื่อยของล้อ (kg*m^2)
-        R = 0.32           # รัศมีล้อ (m)
-        g = 9.81           # แรงโน้มถ่วง
-        FN = mass * g      # แรงกดแนวตั้ง
         
-        # Burckhardt Friction Constants
-        c1, c2, c3, c4 = 1.2801, -23.99, 0.52, 0.03
+        state_vars_names = data.get('state_vars', [])       
+        state_deriv_names = data.get('state_derivatives', []) 
+        target_names = data.get('targets', [])               
+        user_params = data.get('params', {})                
+        equations_strs = data.get('equations', [])          
 
-        # 5. สถานะเริ่มต้น (Initial States)
-        Vx = v_init
-        omega = v_init / R
+        # 1. สร้าง Base Symbols สำหรับตัวแปรพื้นฐานและพารามิเตอร์
+        sym_dict = {'t': sp.Symbol('t')}
+        all_possible_names = (
+            state_vars_names + state_deriv_names + target_names + list(user_params.keys())
+        )
+        for name in all_possible_names:
+            if name not in sym_dict:
+                sym_dict[name] = sp.Symbol(name)
+
+        # 2. ➕ ปลั๊กอินระบบ INTERMEDIATES (สมการตัวแปรตัวกลางทางฟิสิกส์)
+        # รับค่าเช่น {"lambda_val": "(vx - omega * R) / vx"}
+        intermediates_data = data.get('intermediates', {})
+        for var_name, expr_str in intermediates_data.items():
+            if var_name not in sym_dict:
+                sym_dict[var_name] = sp.Symbol(var_name)
+                
+        # แปลงโครงสร้างสมการตัวกลางเก็บไว้
+        inter_exprs = {k: parse_expr(v, local_dict=sym_dict) for k, v in intermediates_data.items()}
+
+        # 3. 🧠 ปลั๊กอินระบบ CONDITIONS (ไอเดียของคุณแปลงเป็น sp.Piecewise)
+        # รับค่าเช่น {"Tb": {"lambda_val > 0.20": "0.0", "default": "torque"}}
+        conditions_data = data.get('conditions', {})
+        conditional_expressions = {}
         
-        chart_data = []
-
-        # 6. Simulation Loop (Discrete Math Engine)
-        for i in range(n_steps):
-            t = i * dt
+        for var_name, cond_map in conditions_data.items():
+            if var_name not in sym_dict:
+                sym_dict[var_name] = sp.Symbol(var_name)
+                
+            pairs = []
+            for cond_str, val_str in cond_map.items():
+                # แปลงค่าผลลัพธ์ (Value) เช่น "0.0" หรือ "torque"
+                val_expr = parse_expr(val_str, local_dict=sym_dict)
+                
+                # แปลงเงื่อนไข (Condition) เช่น "lambda_val > 0.20" ให้กลายเป็นอสมการเชิงสัญลักษณ์
+                if cond_str.lower() in ['default', 'true', 'else']:
+                    cond_expr = True
+                else:
+                    cond_expr = parse_expr(cond_str, local_dict=sym_dict)
+                
+                pairs.append((val_expr, cond_expr))
             
-            # บันทึกสถานะปัจจุบันลงใน Array ที่จะส่งกลับไปให้ Recharts ใน React
-            chart_data.append({
-                "time": float(round(t, 3)),
-                "vx": float(round(Vx, 2)),
-                "wr": float(round(omega * R, 2))
-            })
+            # ยัดโครงสร้างอสมการทั้งหมดเข้าสู่สัญลักษณ์ Piecewise ของ SymPy
+            conditional_expressions[var_name] = sp.Piecewise(*pairs)
 
-            # SAFETY SWITCH: ถ้าความเร็วรถต่ำกว่า 0.5 m/s ถือว่ารถหยุดสนิทแล้ว
-            if Vx < 0.5:
-                continue
+        # 4. ทำการหลอมรวม (Substitute) ตัวแปรเงื่อนไขและตัวแปรตัวกลางเข้าไปในระบบสากล
+        # อัปเดต sym_dict เพื่อให้ตอนแปลงสมการหลัก มันจะดึงเอาโครงสร้างเงื่อนไขไปฝังไว้ข้างในทันที
+        sym_dict.update(inter_exprs)
+        sym_dict.update(conditional_expressions)
 
-            # คำนวณ Slip Ratio (λ)
-            lambda_val = (Vx - omega * R) / Vx
-            lambda_val = max(0.0, min(lambda_val, 1.0)) # คุมค่าให้อยู่ในช่วง 0 - 1
+        # 5. แปลงและย้ายข้างสมการหลักตามปกติ
+        parsed_eqs = [parse_expr(eq, local_dict=sym_dict) for eq in equations_strs]
+        target_symbols = [sym_dict[name] for name in target_names]
 
-            # ABS Controller Logic (Bang-Bang Relay)
-            if lambda_val > 0.20:
-                Tb = 0.0        # ปล่อยเบรคชั่วคราวเมื่อล้อเริ่มล็อก
-            else:
-                Tb = Tb_max     # จับเบรคเต็มแรงเมื่อล้อยังยึดเกาะได้อยู่
+        solved = sp.solve(parsed_eqs, target_symbols)
+        if not solved:
+            return jsonify({"error": "SymPy ไม่สามารถแก้ระบบสมการหา Target ที่ระบุได้"}), 400
 
-            # คำนวณสัมประสิทธิ์แรงเสียดทานด้วย Burckhardt Formula
-            mu = (c1 * (1.0 - np.exp(c2 * lambda_val)) - c3 * lambda_val) * np.exp(-c4 * Vx)
-            
-            # คำนวณแรงและทอร์กที่เกิดขึ้นจริง
-            Ff = mu * FN
-            T_road = Ff * R
-
-            # สมการเชิงอนุพันธ์แปลงเป็น Discrete (Euler Method)
-            dVx = -Ff / mass
-            domega = (T_road - Tb) / J
-
-            # อัปเดตค่าความเร็วสำหรับรอบถัดไป
-            Vx += dVx * dt
-            omega += domega * dt
-            
-            if omega < 0:
-                omega = 0.0
-
-        return jsonify(chart_data), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-
-@app.route('/api/simulate/2dof', methods=['POST'])
-def simulate_2dof():
-    try:
-        # 1. ดึงข้อมูล JSON จาก Body ของ Request
-        data = request.get_json() or {}
-
-        # 2. นิยามตัวแปรเชิงสัญลักษณ์ (Symbols) รอไว้สำหรับ SymPy
-        m1, m2, k1, k2, c1, c2, F1, F2 = sp.symbols('m1 m2 k1 k2 c1 c2 F1 F2')
-        x1, x2, dx1, dx2, ddx1, ddx2 = sp.symbols('x1 x2 dx1 dx2 ddx1 ddx2')
-
-        # 3. รับ String สมการจากหน้าบ้าน (กำหนดแบบรูปสมการ LHS = 0)
-        # ถ้าหน้าบ้านไม่ได้ส่งมา จะใช้สมการมาตรฐานของระบบ 2DOF สปริง-แดมเปอร์คู่
-        default_eq1 = "m1*ddx1 + (c1 + c2)*dx1 - c2*dx2 + (k1 + k2)*x1 - k2*x2 - F1"
-        default_eq2 = "m2*ddx2 - c2*dx1 + c2*dx2 - k2*x1 + k2*x2 - F2"
-
-        eq1_str = data.get('eq1', default_eq1)
-        eq2_str = data.get('eq2', default_eq2)
-
-        # แปลงจาก String ไปเป็น Object นิพจน์คณิตศาสตร์ของ SymPy
-        eq1_expr = parse_expr(eq1_str)
-        eq2_expr = parse_expr(eq2_str)
-
-        # 4. สั่งให้ SymPy แก้ระบบสมการเพื่อหาแง่มุมของความเร่ง (ddx1, ddx2) ออกมาโดยอัตโนมัติ
-        # (มันจะทำหน้าที่ย้ายข้างสมการจัดรูปยุ่งๆ ให้เราเอง)
-        solved_system = sp.solve([eq1_expr, eq2_expr], (ddx1, ddx2))
+        # 6. แทนค่าพารามิเตอร์คงที่
+        param_subs = {sym_dict[k]: float(v) for k, v in user_params.items() if k in sym_dict and not isinstance(sym_dict[k], sp.Piecewise)}
         
-        if not solved_system:
-            return jsonify({"error": "SymPy ไม่สามารถแก้หาค่า ddx1 และ ddx2 จากสมการที่ส่งมาได้"}), 400
-            
-        ddx1_symbolic = solved_system[ddx1]
-        ddx2_symbolic = solved_system[ddx2]
+        solved_exprs = {}
+        for target_sym in target_symbols:
+            expr = solved[target_sym] if isinstance(solved, dict) else solved[0]
+            # ใช้พาวเวอร์ของ SymPy ในการกระจายการแทนค่าลึกเข้าไปในเงื่อนไขอสมการอัตโนมัติ
+            solved_exprs[str(target_sym)] = expr.subs(param_subs)
 
-        # 5. เตรียมจับคู่ค่าพารามิเตอร์ตัวเลขที่ส่งมาจาก React
-        param_subs = {
-            m1: float(data.get('m1', 10.0)),
-            m2: float(data.get('m2', 5.0)),
-            k1: float(data.get('k1', 100.0)),
-            k2: float(data.get('k2', 50.0)),
-            c1: float(data.get('c1', 5.0)),
-            c2: float(data.get('c2', 2.0)),
-            F1: float(data.get('F1', 0.0)),
-            F2: float(data.get('F2', 0.0))
+        # 7. Lambdify ออกมาเป็นฟังก์ชันความเร็วสูง
+        lambdify_args = [sym_dict[name] for name in state_vars_names]
+        compiled_funcs = {
+            name: sp.lambdify(lambdify_args, expr, 'numpy') 
+            for name, expr in solved_exprs.items()
         }
 
-        # แทนค่าคงที่ตัวเลขลงไปในตัวสมการสัญลักษณ์เพื่อให้คำนวณตอนท้ายได้เร็วขึ้น
-        ddx1_numeric_expr = ddx1_symbolic.subs(param_subs)
-        ddx2_numeric_expr = ddx2_symbolic.subs(param_subs)
-
-        # 6. ใช้ lambdify แปลงสมการ SymPy ให้กลายเป็นฟังก์ชัน Python ความเร็วสูง (เทียบเท่าฟังก์ชันปกติ)
-        # เรียงอาร์กิวเมนต์ตามลำดับสถานะในตัวแปร z = [x1, x2, dx1, dx2]
-        func_ddx1 = sp.lambdify((x1, x2, dx1, dx2), ddx1_numeric_expr, 'numpy')
-        func_ddx2 = sp.lambdify((x1, x2, dx1, dx2), ddx2_numeric_expr, 'numpy')
-
-        # 7. สร้างฟังก์ชันสำหรับป้อนเข้า Scipy ODE Solver
-        def dynamic_system(t, z):
-            x1_val, x2_val, dx1_val, dx2_val = z
+        # 8. Dynamic ODE Callback Engine
+        def ode_callback(t_curr, z):
+            current_state_env = {name: val for name, val in zip(state_vars_names, z)}
             
-            # เรียกใช้ฟังก์ชันที่ถูกแปลงมาจาก String แบบ Dynamic
-            ddx1_val = float(func_ddx1(x1_val, x2_val, dx1_val, dx2_val))
-            ddx2_val = float(func_ddx2(x1_val, x2_val, dx1_val, dx2_val))
-            
-            return [dx1_val, dx2_val, ddx1_val, ddx2_val]
+            # ป้องกันข้อจำกัดฟิสิกส์ของ ABS (กรณีถ้ารถหยุดสนิท) ส่งตรงมาจากหน้าบ้านได้เช่นกัน
+            if 'vx' in current_state_env and current_state_env['vx'] < 0.5:
+                return [0.0] * len(state_deriv_names)
 
-        # 8. ตั้งค่า Initial Conditions และเวลาการรัน
-        z0 = [float(val) for val in data.get('z0', [1.0, 0.0, 0.0, 0.0])]
-        t_end = float(data.get('t_end', 10.0))
-        t_eval = np.linspace(0, t_end, 1000)
+            evaluated_targets = {}
+            for name, func in compiled_funcs.items():
+                evaluated_targets[name] = float(func(*z))
 
-        # สั่งรันคำนวณสมการเชิงอนุพันธ์ (ODE)
-        sol = solve_ivp(dynamic_system, [0, t_end], z0, t_eval=t_eval, method='RK45')
+            dz_dt = []
+            for name in state_deriv_names:
+                if name in current_state_env:
+                    dz_dt.append(current_state_env[name])
+                elif name in evaluated_targets:
+                    dz_dt.append(evaluated_targets[name])
+                else:
+                    dz_dt.append(0.0)
+                    
+            return dz_dt
 
-        # 9. จัดฟอร์แมต Array ข้อมูลเพื่อส่งกลับไปพล็อต Recharts บน React หน้าบ้าน
+        # 9. รันตัวคำนวณและส่งข้อมูลกลับ
+        z0 = [float(val) for val in data.get('z0', [])]
+        t_end = float(data.get('t_end', 3.0))
+        t_eval = np.linspace(0, t_end, int(data.get('steps', 300)))
+
+        sol = solve_ivp(ode_callback, [0, t_end], z0, t_eval=t_eval, method='RK45')
+
         chart_data = []
         for i in range(len(sol.t)):
-            chart_data.append({
-                "time": float(round(sol.t[i], 3)),
-                "x1": float(round(sol.y[0][i], 4)),
-                "x2": float(round(sol.y[1][i], 4)),
-                "v1": float(round(sol.y[2][i], 4)),
-                "v2": float(round(sol.y[3][i], 4))
-            })
+            point = {"time": float(round(sol.t[i], 3))}
+            for j, name in enumerate(state_vars_names):
+                val = sol.y[j][i]
+                # แปลงล้อหมุนเชิงมุมให้เป็นความเร็วเชิงเส้นบนกราฟอัตโนมัติหากชื่อเป็น omega
+                if name == 'omega' and 'R' in user_params:
+                    point['wr'] = float(round(max(0.0, val * float(user_params['R'])), 2))
+                point[name] = float(round(max(0.0, val), 4)) if name == 'vx' else float(round(val, 4))
+            chart_data.append(point)
 
         return jsonify(chart_data), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
 
 if __name__ == '__main__':
     # เปิดโปรเจกต์ที่พอร์ต 3000 (หรือพอร์ตอื่นๆ ตามที่คุณสะดวก)

@@ -11,6 +11,7 @@ import json
 import paho.mqtt.client as mqtt
 from threading import Lock
 import time
+from scipy.integrate import solve_ivp
 # --- Corrected MQTT Configuration (NETPIE) ---
 NETPIE_CLIENT_ID = "427e0ae3-fd74-471a-8cc6-3f4dfc7d3641"   
 NETPIE_TOKEN = "W8xAzJNmSQAD3DnMZk9kU4DQAC3hksvs"           
@@ -240,7 +241,74 @@ def simulate_abs():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
 
+@app.route('/api/simulate/2dof', methods=['POST'])
+def simulate_2dof():
+    try:
+        # 1. ดึงข้อมูล JSON จาก Body ของ POST Request
+        data = request.get_json() or {}
+        
+        # 2. รับค่าพารามิเตอร์ระบบ (มี Default รองรับกรณีหน้าบ้านไม่ได้ส่งมา)
+        m1 = float(data.get('m1', 10.0))
+        m2 = float(data.get('m2', 5.0))
+        k1 = float(data.get('k1', 100.0))
+        k2 = float(data.get('k2', 50.0))
+        c1 = float(data.get('c1', 5.0))
+        c2 = float(data.get('c2', 2.0))
+        
+        # 3. ดึงเงื่อนไขเริ่มต้น (Initial Conditions) และเวลาเปิดรับจาก JSON ได้โดยตรง
+        # คาดหวังรูปแบบ Array: [x1_init, x2_init, v1_init, v2_init]
+        z0 = data.get('z0', [1.0, 0.0, 0.0, 0.0])
+        z0 = [float(val) for val in z0] # แปลงสมาชิกทุกตัวให้เป็น float เพื่อความปลอดภัย
+        
+        t_end = float(data.get('t_end', 10.0))
+        
+        # 4. เพิ่มแรงภายนอก (External Forces) ให้ปรับเปลี่ยนแบบ Dynamic ได้จาก React
+        F1 = float(data.get('F1', 0.0))
+        F2 = float(data.get('F2', 0.0))
+
+        # ฟังก์ชันสมการ ODE นิยามไว้ด้านในเพื่อดึงตัวแปร F1, F2 ไปใช้ได้ง่ายขึ้น
+        def two_dof_system(t, z, m1, m2, k1, k2, c1, c2, F1, F2):
+            x1, x2, v1, v2 = z
+            
+            dx1_dt = v1
+            dx2_dt = v2
+            dv1_dt = (F1 - (c1 + c2)*v1 + c2*v2 - (k1 + k2)*x1 + k2*x2) / m1
+            dv2_dt = (F2 + c2*v1 - c2*v2 + k2*x1 - k2*x2) / m2
+            
+            return [dx1_dt, dx2_dt, dv1_dt, dv2_dt]
+
+        # --- ช่วงเวลาจำลอง ---
+        t_start = 0.0
+        t_eval = np.linspace(t_start, t_end, 1000)
+
+        # --- คำนวณ ODE ด้วย Scipy ---
+        sol = solve_ivp(
+            two_dof_system, 
+            [t_start, t_end], 
+            z0, 
+            args=(m1, m2, k1, k2, c1, c2, F1, F2), 
+            t_eval=t_eval,
+            method='RK45'
+        )
+
+        # --- แปลงผลลัพธ์เพื่อส่งกลับให้ Recharts พล็อตบน React ---
+        chart_data = []
+        for i in range(len(sol.t)):
+            chart_data.append({
+                "time": float(round(sol.t[i], 3)),
+                "x1": float(round(sol.y[0][i], 4)),
+                "x2": float(round(sol.y[1][i], 4)),
+                "v1": float(round(sol.y[2][i], 4)),
+                "v2": float(round(sol.y[3][i], 4))
+            })
+
+        return jsonify(chart_data), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 
 if __name__ == '__main__':
     # เปิดโปรเจกต์ที่พอร์ต 3000 (หรือพอร์ตอื่นๆ ตามที่คุณสะดวก)

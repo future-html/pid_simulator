@@ -165,21 +165,6 @@ const SimulinkBuilderPage: React.FC = () => {
     fileInputRef.current?.click();
   }, []);
 
-  // Add this helper function first
-  const computeDirection = (
-    fromPos: { x: number; y: number },
-    toPos: { x: number; y: number },
-  ): "left" | "right" | "top" | "bottom" => {
-    const dx = toPos.x - fromPos.x;
-    const dy = toPos.y - fromPos.y;
-
-    if (Math.abs(dx) >= Math.abs(dy)) {
-      return dx > 0 ? "right" : "left";
-    } else {
-      return dy > 0 ? "bottom" : "top";
-    }
-  };
-
   const handleFileImport = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];

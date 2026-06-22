@@ -23,8 +23,9 @@ export interface ConnectionData {
   from: number;
   to: number;
   direction: 'left' | 'right' | 'top' | 'bottom';
-  fromPortIndex?: number; // output port index (for subsystems)
-  toPortIndex?: number;   // input port index (for subsystems)
+  sign?: '+' | '-';   // <-- new
+  fromPortIndex?: number;
+  toPortIndex?: number;
 }
 
 export const componentLibrary = {

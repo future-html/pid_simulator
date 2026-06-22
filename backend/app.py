@@ -12,6 +12,9 @@ import paho.mqtt.client as mqtt
 from threading import Lock
 import time
 from scipy.integrate import solve_ivp
+import sympy as sp
+from sympy.parsing.sympy_parser import parse_expr
+
 # --- Corrected MQTT Configuration (NETPIE) ---
 NETPIE_CLIENT_ID = "427e0ae3-fd74-471a-8cc6-3f4dfc7d3641"   
 NETPIE_TOKEN = "W8xAzJNmSQAD3DnMZk9kU4DQAC3hksvs"           
@@ -161,25 +164,27 @@ def create_user():
 
 # --- ROUTES ใหม่สำหรับระบบ ABS SIMULATION (เพื่อส่งให้ React) ---
 
-@app.route('/api/simulate', methods=['GET'])
+@app.route('/api/simulate', methods=['POST'])
 def simulate_abs():
     """
-    Endpoint สำหรับคำนวณสมการ ABS แบบ Dynamic 
-    รองรับ Query Parameters เพื่อปรับเปลี่ยนค่าจากหน้าบ้านได้ เช่น:
-    /api/simulate?mass=250&torque=1200&v_init=30
+    Endpoint สำหรับคำนวณสมการ ABS แบบ Dynamic ผ่าน POST Method
+    รับค่าพารามิเตอร์จาก JSON Body จากหน้าบ้าน (React)
     """
     try:
-        # 1. รับค่าพารามิเตอร์จาก React (ถ้าไม่ส่งมาจะใช้ค่า Default ข้างหลัง)
-        mass = float(request.args.get('mass', 250.0))       # น้ำหนักตัวรถ (kg)
-        Tb_max = float(request.args.get('torque', 1200.0))   # แรงเบรคสูงสุด (Nm)
-        v_init = float(request.args.get('v_init', 30.0))    # ความเร็วเริ่มต้น (m/s)
+        # 1. ดึงข้อมูล JSON จาก Body ของ POST Request
+        data = request.get_json() or {}
 
-        # 2. ตั้งค่าโครงสร้างเชิงตัวเลข (Discrete Simulation Settings)
+        # 2. รับค่าพารามิเตอร์จาก JSON (ถ้าไม่มีการส่งมา จะใช้ค่า Default ด้านหลัง)
+        mass = float(data.get('mass', 250.0))       # น้ำหนักตัวรถ (kg)
+        Tb_max = float(data.get('torque', 1200.0))   # แรงเบรคสูงสุด (Nm)
+        v_init = float(data.get('v_init', 30.0))    # ความเร็วเริ่มต้น (m/s)
+
+        # 3. ตั้งค่าโครงสร้างเชิงตัวเลข (Discrete Simulation Settings)
         dt = 0.01          # ขนาดของ Step (10ms ต่อรอบ กำลังดีสำหรับกราฟเว็บ)
         t_max = 3.0        # จำลองเหตุการณ์สูงสุด 3 วินาที
         n_steps = int(t_max / dt)
 
-        # 3. พารามิเตอร์คงที่ของโมเดล ABS
+        # 4. พารามิเตอร์คงที่ของโมเดล ABS
         J = 1.0            # ความเฉื่อยของล้อ (kg*m^2)
         R = 0.32           # รัศมีล้อ (m)
         g = 9.81           # แรงโน้มถ่วง
@@ -188,13 +193,13 @@ def simulate_abs():
         # Burckhardt Friction Constants
         c1, c2, c3, c4 = 1.2801, -23.99, 0.52, 0.03
 
-        # 4. สถานะเริ่มต้น (Initial States)
+        # 5. สถานะเริ่มต้น (Initial States)
         Vx = v_init
         omega = v_init / R
         
         chart_data = []
 
-        # 5. Simulation Loop (Discrete Math Engine)
+        # 6. Simulation Loop (Discrete Math Engine)
         for i in range(n_steps):
             t = i * dt
             
@@ -241,59 +246,81 @@ def simulate_abs():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+
+
 
 @app.route('/api/simulate/2dof', methods=['POST'])
 def simulate_2dof():
     try:
-        # 1. ดึงข้อมูล JSON จาก Body ของ POST Request
+        # 1. ดึงข้อมูล JSON จาก Body ของ Request
         data = request.get_json() or {}
+
+        # 2. นิยามตัวแปรเชิงสัญลักษณ์ (Symbols) รอไว้สำหรับ SymPy
+        m1, m2, k1, k2, c1, c2, F1, F2 = sp.symbols('m1 m2 k1 k2 c1 c2 F1 F2')
+        x1, x2, dx1, dx2, ddx1, ddx2 = sp.symbols('x1 x2 dx1 dx2 ddx1 ddx2')
+
+        # 3. รับ String สมการจากหน้าบ้าน (กำหนดแบบรูปสมการ LHS = 0)
+        # ถ้าหน้าบ้านไม่ได้ส่งมา จะใช้สมการมาตรฐานของระบบ 2DOF สปริง-แดมเปอร์คู่
+        default_eq1 = "m1*ddx1 + (c1 + c2)*dx1 - c2*dx2 + (k1 + k2)*x1 - k2*x2 - F1"
+        default_eq2 = "m2*ddx2 - c2*dx1 + c2*dx2 - k2*x1 + k2*x2 - F2"
+
+        eq1_str = data.get('eq1', default_eq1)
+        eq2_str = data.get('eq2', default_eq2)
+
+        # แปลงจาก String ไปเป็น Object นิพจน์คณิตศาสตร์ของ SymPy
+        eq1_expr = parse_expr(eq1_str)
+        eq2_expr = parse_expr(eq2_str)
+
+        # 4. สั่งให้ SymPy แก้ระบบสมการเพื่อหาแง่มุมของความเร่ง (ddx1, ddx2) ออกมาโดยอัตโนมัติ
+        # (มันจะทำหน้าที่ย้ายข้างสมการจัดรูปยุ่งๆ ให้เราเอง)
+        solved_system = sp.solve([eq1_expr, eq2_expr], (ddx1, ddx2))
         
-        # 2. รับค่าพารามิเตอร์ระบบ (มี Default รองรับกรณีหน้าบ้านไม่ได้ส่งมา)
-        m1 = float(data.get('m1', 10.0))
-        m2 = float(data.get('m2', 5.0))
-        k1 = float(data.get('k1', 100.0))
-        k2 = float(data.get('k2', 50.0))
-        c1 = float(data.get('c1', 5.0))
-        c2 = float(data.get('c2', 2.0))
-        
-        # 3. ดึงเงื่อนไขเริ่มต้น (Initial Conditions) และเวลาเปิดรับจาก JSON ได้โดยตรง
-        # คาดหวังรูปแบบ Array: [x1_init, x2_init, v1_init, v2_init]
-        z0 = data.get('z0', [1.0, 0.0, 0.0, 0.0])
-        z0 = [float(val) for val in z0] # แปลงสมาชิกทุกตัวให้เป็น float เพื่อความปลอดภัย
-        
+        if not solved_system:
+            return jsonify({"error": "SymPy ไม่สามารถแก้หาค่า ddx1 และ ddx2 จากสมการที่ส่งมาได้"}), 400
+            
+        ddx1_symbolic = solved_system[ddx1]
+        ddx2_symbolic = solved_system[ddx2]
+
+        # 5. เตรียมจับคู่ค่าพารามิเตอร์ตัวเลขที่ส่งมาจาก React
+        param_subs = {
+            m1: float(data.get('m1', 10.0)),
+            m2: float(data.get('m2', 5.0)),
+            k1: float(data.get('k1', 100.0)),
+            k2: float(data.get('k2', 50.0)),
+            c1: float(data.get('c1', 5.0)),
+            c2: float(data.get('c2', 2.0)),
+            F1: float(data.get('F1', 0.0)),
+            F2: float(data.get('F2', 0.0))
+        }
+
+        # แทนค่าคงที่ตัวเลขลงไปในตัวสมการสัญลักษณ์เพื่อให้คำนวณตอนท้ายได้เร็วขึ้น
+        ddx1_numeric_expr = ddx1_symbolic.subs(param_subs)
+        ddx2_numeric_expr = ddx2_symbolic.subs(param_subs)
+
+        # 6. ใช้ lambdify แปลงสมการ SymPy ให้กลายเป็นฟังก์ชัน Python ความเร็วสูง (เทียบเท่าฟังก์ชันปกติ)
+        # เรียงอาร์กิวเมนต์ตามลำดับสถานะในตัวแปร z = [x1, x2, dx1, dx2]
+        func_ddx1 = sp.lambdify((x1, x2, dx1, dx2), ddx1_numeric_expr, 'numpy')
+        func_ddx2 = sp.lambdify((x1, x2, dx1, dx2), ddx2_numeric_expr, 'numpy')
+
+        # 7. สร้างฟังก์ชันสำหรับป้อนเข้า Scipy ODE Solver
+        def dynamic_system(t, z):
+            x1_val, x2_val, dx1_val, dx2_val = z
+            
+            # เรียกใช้ฟังก์ชันที่ถูกแปลงมาจาก String แบบ Dynamic
+            ddx1_val = float(func_ddx1(x1_val, x2_val, dx1_val, dx2_val))
+            ddx2_val = float(func_ddx2(x1_val, x2_val, dx1_val, dx2_val))
+            
+            return [dx1_val, dx2_val, ddx1_val, ddx2_val]
+
+        # 8. ตั้งค่า Initial Conditions และเวลาการรัน
+        z0 = [float(val) for val in data.get('z0', [1.0, 0.0, 0.0, 0.0])]
         t_end = float(data.get('t_end', 10.0))
-        
-        # 4. เพิ่มแรงภายนอก (External Forces) ให้ปรับเปลี่ยนแบบ Dynamic ได้จาก React
-        F1 = float(data.get('F1', 0.0))
-        F2 = float(data.get('F2', 0.0))
+        t_eval = np.linspace(0, t_end, 1000)
 
-        # ฟังก์ชันสมการ ODE นิยามไว้ด้านในเพื่อดึงตัวแปร F1, F2 ไปใช้ได้ง่ายขึ้น
-        def two_dof_system(t, z, m1, m2, k1, k2, c1, c2, F1, F2):
-            x1, x2, v1, v2 = z
-            
-            dx1_dt = v1
-            dx2_dt = v2
-            dv1_dt = (F1 - (c1 + c2)*v1 + c2*v2 - (k1 + k2)*x1 + k2*x2) / m1
-            dv2_dt = (F2 + c2*v1 - c2*v2 + k2*x1 - k2*x2) / m2
-            
-            return [dx1_dt, dx2_dt, dv1_dt, dv2_dt]
+        # สั่งรันคำนวณสมการเชิงอนุพันธ์ (ODE)
+        sol = solve_ivp(dynamic_system, [0, t_end], z0, t_eval=t_eval, method='RK45')
 
-        # --- ช่วงเวลาจำลอง ---
-        t_start = 0.0
-        t_eval = np.linspace(t_start, t_end, 1000)
-
-        # --- คำนวณ ODE ด้วย Scipy ---
-        sol = solve_ivp(
-            two_dof_system, 
-            [t_start, t_end], 
-            z0, 
-            args=(m1, m2, k1, k2, c1, c2, F1, F2), 
-            t_eval=t_eval,
-            method='RK45'
-        )
-
-        # --- แปลงผลลัพธ์เพื่อส่งกลับให้ Recharts พล็อตบน React ---
+        # 9. จัดฟอร์แมต Array ข้อมูลเพื่อส่งกลับไปพล็อต Recharts บน React หน้าบ้าน
         chart_data = []
         for i in range(len(sol.t)):
             chart_data.append({

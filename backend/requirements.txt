@@ -6,3 +6,4 @@ certifi
 control
 paho-mqtt
 scipy
+sympy

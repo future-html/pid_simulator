@@ -291,6 +291,56 @@ def universal_simulate():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+class PIDController:
+    def __init__(self, Kp, Ki, Kd, setpoint):
+        self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
+        self.setpoint = setpoint
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.prev_t = 0.0
+
+    def compute(self, t, current_val):
+        dt = t - self.prev_t
+        if dt <= 0: return 0.0 # Prevent division by zero
+        
+        error = self.setpoint - current_val
+        self.integral += error * dt
+        derivative = (error - self.prev_error) / dt
+        
+        output = (self.Kp * error) + (self.Ki * self.integral) + (self.Kd * derivative)
+        
+        # Update history
+        self.prev_error = error
+        self.prev_t = t
+        return output
+
+@app.route('/api/simulate/pid', methods=['POST'])
+def pid_simulate():
+    data = request.get_json()
+    # 1. Setup PID
+    pid = PIDController(
+        data['Kp'], data['Ki'], data['Kd'], 
+        data['setpoint']
+    )
+    
+    # 2. Modify ode_callback to use the PID
+    def ode_callback(t, z):
+        # Example: z[0] is current value (e.g., speed)
+        current_val = z[0]
+        control_signal = pid.compute(t, current_val)
+        
+        # System dynamics: dz/dt = f(z, control_signal)
+        # Replace this with your specific system equation
+        dzdt = -0.1 * z[0] + control_signal 
+        return [dzdt]
+
+    # 3. Run solver
+    t_eval = np.linspace(0, data['t_end'], data['steps'])
+    sol = solve_ivp(ode_callback, [0, data['t_end']], [data['z0']], t_eval=t_eval)
+    
+    return jsonify({"time": sol.t.tolist(), "values": sol.y[0].tolist()})
+
+
 if __name__ == '__main__':
     # เปิดโปรเจกต์ที่พอร์ต 3000 (หรือพอร์ตอื่นๆ ตามที่คุณสะดวก)
     app.run(debug=True, port=3000)

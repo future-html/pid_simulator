@@ -161,6 +161,124 @@ def create_user():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/api/analyze/control', methods=['POST'])
+def analyze_control():
+    try:
+        data = request.get_json() or {}
+        
+        state_vars_names = data.get('state_vars', [])       # Ex: ["x", "dx"]
+        state_deriv_names = data.get('state_derivatives', []) 
+        target_names = data.get('targets', [])               # Ex: ["ddx"]
+        equations_strs = data.get('equations', [])          
+        user_params = data.get('params', {})                
+        
+        # คีย์สำคัญสำหรับการวิเคราะห์ระบบควบคุม
+        input_var_name = data.get('input_var')              # ตัวแปรควบคุมหลัก Ex: "F" หรือ "tau"
+        output_var_name = data.get('output_var')            # ตัวแปรผลลัพธ์ที่สนใจ Ex: "x" หรือ "r"
+
+        if not input_var_name or not output_var_name:
+            return jsonify({"error": "กรุณาระบุ input_var และ output_var สำหรับการวิเคราะห์"}), 400
+
+        # 1. สร้าง Base Symbols และแก้ระบบสมการหาพจน์อนุพันธ์สูงสุด
+        sym_dict = {}
+        all_names = state_vars_names + state_deriv_names + target_names + list(user_params.keys()) + [input_var_name]
+        for name in all_names:
+            if name not in sym_dict:
+                sym_dict[name] = sp.Symbol(name)
+
+        parsed_eqs = [parse_expr(eq, local_dict=sym_dict) for eq in equations_strs]
+        target_symbols = [sym_dict[name] for name in target_names]
+        
+        solved = sp.solve(parsed_eqs, target_symbols)
+        if not solved:
+            return jsonify({"error": "ไม่สามารถแก้สมการเพื่อหาความสัมพันธ์เชิงสัญลักษณ์ได้"}), 400
+
+        # 2. จัดรูปแบบสมการอนุพันธ์อันดับหนึ่ง: dx/dt = f(x, u)
+        # แมปชื่อตัวแปรอนุพันธ์กับพจน์สมสัญญลักษณ์ที่ย้ายข้างแล้ว
+        f_exprs = []
+        for deriv_name in state_deriv_names:
+            if deriv_name in state_vars_names:
+                # เคสทั่วไปเช่น dx = dx (เป็นตัวแปรสถานะอยู่แล้ว)
+                f_exprs.append(sym_dict[deriv_name])
+            elif deriv_name in target_names:
+                # เคสที่เป็นพจน์สูงสุดที่เพิ่งย้ายข้างมา เช่น ddx = (-c*dx - k*x + F)/m
+                expr = solved[sym_dict[deriv_name]] if isinstance(solved, dict) else solved[0]
+                f_exprs.append(expr)
+
+        # 3. 🔥 DYNAMIC LINEARIZATION (หาเมทริกซ์ State-Space A และ B ด้วย Jacobian)
+        state_vector = [sym_dict[name] for name in state_vars_names]
+        input_symbol = sym_dict[input_var_name]
+        
+        # หาอนุพันธ์ย่อยเทียบกับ State (Matrix A) และเทียบกับ Input (Matrix B)
+        A_jacobian = sp.Matrix(f_exprs).jacobian(state_vector)
+        B_jacobian = sp.Matrix(f_exprs).jacobian([input_symbol])
+
+        # 4. แทนค่าพารามิเตอร์คงที่และจุดสมดุล (Equilibrium Point) ให้กลายเป็นตัวเลข
+        # สมมุติให้ระบบคำนวณรอบจุดทำงานเริ่มต้นที่ z0 = 0.0 และ u = 0.0
+        equilibrium_subs = {sym_dict[name]: 0.0 for name in state_vars_names}
+        equilibrium_subs[input_symbol] = 0.0
+        param_subs = {sym_dict[k]: float(v) for k, v in user_params.items() if k in sym_dict}
+        
+        # รวมการแทนค่าทั้งหมด
+        final_subs = {**param_subs, **equilibrium_subs}
+        
+        A_num = np.array(A_jacobian.subs(final_subs)).astype(np.float64)
+        B_num = np.array(B_jacobian.subs(final_subs)).astype(np.float64)
+
+        # สร้างเมทริกซ์ C และ D จากตัวแปรผลลัพธ์ (Output) ที่เลือก
+        C_num = np.zeros((1, len(state_vars_names)))
+        if output_var_name in state_vars_names:
+            C_num[0, state_vars_names.index(output_var_name)] = 1.0
+        D_num = np.zeros((1, 1))
+
+        # แปลงโครงสร้าง State-Space เป็นวัตถุระบบของ SciPy
+        sys_ss = signal.StateSpace(A_num, B_num, C_num, D_num)
+
+        # 5. 📈 คำนวณข้อมูล BODE PLOT
+        # กำหนดช่วงความถี่แบบ Logarithmic (10^-2 ถึง 10^3 rad/s) ทั้งหมด 200 จุด
+        w_space = np.logspace(-2, 3, 200)
+        w, mag, phase = signal.bode(sys_ss, w=w_space)
+        
+        bode_data = []
+        for i in range(len(w)):
+            bode_data.append({
+                "frequency": float(w[i]),
+                "magnitude": float(mag[i]),
+                "phase": float(phase[i])
+            })
+
+        # 6. 🎯 คำนวณข้อมูล ROOT LOCUS (พิกัดการเดินของรากเมื่อ Gain K เปลี่ยนแปลง)
+        # วนลูปเปลี่ยนค่า Gain ตั้งแต่ 0 ถึงพิกัดสูงสุด
+        gains = np.logspace(-1, 3, 150) # ลิสต์ค่า Gain K ตั้งแต่ 0.1 ถึง 1000
+        root_locus_data = []
+        
+        for k_gain in gains:
+            # ในระบบป้อนกลับ (Closed-Loop) ขั้วของระบบ (Poles) คือค่า Eigenvalues ของเมทริกซ์ (A - K*B*C)
+            closed_loop_A = A_num - k_gain * (B_num @ C_num)
+            poles = np.linalg.eigvals(closed_loop_A)
+            
+            for p in poles:
+                root_locus_data.append({
+                    "gain": float(k_gain),
+                    "real": float(np.real(p)),
+                    "imag": float(np.imag(p))
+                })
+
+        # 7. คืนค่าผลลัพธ์วิเคราะห์คู่คู่ส่งกลับให้ React
+        return jsonify({
+            "bode_plot": bode_data,
+            "root_locus": root_locus_data,
+            "matrices": {
+                "A": A_num.tolist(),
+                "B": B_num.tolist(),
+                "C": C_num.tolist()
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/simulate/universal', methods=['POST'])
 def universal_simulate():
     try:

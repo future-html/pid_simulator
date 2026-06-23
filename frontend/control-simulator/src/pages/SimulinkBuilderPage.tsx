@@ -1,4 +1,4 @@
-import  { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios, { AxiosError } from 'axios';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -35,10 +35,11 @@ interface DataPoint {
 // ─── API Configuration ──────────────
 const API_BASE = 'https://pid-simulator-7llg.vercel.app';
 
+// ─── Corrected Mathematical Models ──────────────
 const SYSTEMS: Record<string, SystemConfig> = {
   '1dof': {
     label: '1-DOF Mass-Spring-Damper',
-    desc: 'x, dx · m·ddx + c·dx + k·x = F',
+    desc: 'x, dx · ms² + cs + k = F',
     payload: {
       state_vars: ['x', 'dx'],
       state_derivatives: ['dx', 'ddx'],
@@ -53,16 +54,17 @@ const SYSTEMS: Record<string, SystemConfig> = {
   },
   '2dof': {
     label: '2-DOF Coupled Mass-Spring',
-    desc: 'x₁, x₂ · two masses with springs',
+    desc: 'x₁, x₂ · Include c3 and k3',
     payload: {
       state_vars: ['x1', 'x2', 'dx1', 'dx2'],
       state_derivatives: ['dx1', 'dx2', 'ddx1', 'ddx2'],
       targets: ['ddx1', 'ddx2'],
       equations: [
         'm1*ddx1 + (c1 + c2)*dx1 - c2*dx2 + (k1 + k2)*x1 - k2*x2 - F1',
-        'm2*ddx2 - c2*dx1 + c2*dx2 - k2*x1 + k2*x2 - F2'
+        // Corrected Equation based on reference: added c3 and k3
+        'm2*ddx2 - c2*dx1 + (c2 + c3)*dx2 - k2*x1 + (k2 + k3)*x2 - F2'
       ],
-      params: { m1: 10.0, m2: 5.0, k1: 100.0, k2: 50.0, c1: 5.0, c2: 2.0, F1: 0.0, F2: 0.0 },
+      params: { m1: 10.0, m2: 5.0, k1: 100.0, k2: 50.0, k3: 20.0, c1: 5.0, c2: 2.0, c3: 1.0, F1: 0.0, F2: 0.0 },
       z0: [1.0, 0.0, 0.0, 0.0],
       t_end: 10.0,
       steps: 1000,
@@ -70,74 +72,95 @@ const SYSTEMS: Record<string, SystemConfig> = {
     colors: ['#64b5f6', '#42e695', '#ffb74d', '#ef5350']
   },
   'tank': {
-    label: 'Tank Level',
-    desc: 'h · A·dh = Qin − Qout',
+    label: 'Tank Level (PID)',
+    desc: 'h · A·dh = Qin(PID) − Qout',
     payload: {
-      state_vars: ['h'],
-      state_derivatives: ['dh'],
-      targets: ['dh'],
-      intermediates: { Qout: 'c * sqrt(h)' },
-      conditions: {
-        Qin: { 'h > 3.5': '0.0', 'default': 'input_flow' }
+      state_vars: ['h', 'int_e'], // Added integral of error state for Ki
+      state_derivatives: ['dh', 'd_int_e'],
+      targets: ['dh', 'd_int_e'],
+      intermediates: {
+        e: 'r_target - h',
+        Qout: 'Cv * sqrt(h)'
       },
-      equations: ['dh - (Qin - Qout) / A'],
-      params: { A: 1.5, c: 0.35, input_flow: 0.8 },
-      z0: [0.5],
+      equations: [
+        'd_int_e - e',
+        // Algebraic resolution of PID: dh = (Kp*e + Ki*int_e + Kd*(-dh) - Qout)/A
+        // Becomes: (A + Kd)*dh = Kp*e + Ki*int_e - Qout
+        '(A + Kd) * dh - (Kp * e + Ki * int_e - Qout)'
+      ],
+      params: { A: 1.5, Cv: 0.35, r_target: 3.5, Kp: 0.8, Ki: 0.1, Kd: 0.2 },
+      z0: [0.5, 0.0],
       t_end: 30.0,
       steps: 400,
     },
-    colors: ['#42e695']
+    colors: ['#42e695', '#ffb74d']
   },
   'ballbeam': {
     label: 'Ball & Beam (PD)',
-    desc: 'r, θ · with PD controller',
+    desc: 'r, θ · with Linearized Plant',
     payload: {
-      state_vars: ['r', 'theta', 'dr', 'dtheta'],
-      state_derivatives: ['dr', 'dtheta', 'ddr', 'ddtheta'],
-      targets: ['ddr', 'ddtheta'],
-      equations: [
-        '1.4 * mb * ddr + mb * g * sin(theta) - mb * r * dtheta**2',
-        '(J_beam + mb * r**2) * ddtheta + 2 * mb * r * dr * dtheta + mb * g * r * cos(theta) - tau'
-      ],
+      state_vars: ['r', 'dr'], // Simulating purely r, since θ is output of PD
+      state_derivatives: ['dr', 'ddr'],
+      targets: ['ddr'],
       intermediates: {
-        tau: 'Kp_r * (r_target - r) - Kd_r * dr - Kp_theta * theta - Kd_theta * dtheta'
+        e: 'r_target - r',
+        de: '-dr',
+        theta: 'Kp * e + Kd * de' // Desired beam angle from PD
       },
+      equations: [
+        // Plant: (J/R² + m)r'' = -mg sin(θ)
+        '(J / R**2 + m) * ddr + m * g * sin(theta)'
+      ],
       params: {
-        mb: 0.1, J_beam: 0.05, g: 9.81, r_target: 0.0,
-        Kp_r: 2.5, Kd_r: 1.2, Kp_theta: 5.0, Kd_theta: 1.5
+        m: 0.1,
+        J: 0.00004, // Inertia
+        R: 0.031,   // Radius
+        g: 9.81,
+        r_target: 0.0,
+        Kp: 0.5,
+        Kd: 0.2
       },
-      z0: [0.4, 0.1, 0.0, 0.0],
+      z0: [0.4, 0.0],
       t_end: 8.0,
       steps: 400,
     },
-    colors: ['#ffb74d', '#64b5f6', '#42e695', '#ef5350']
+    colors: ['#ffb74d', '#64b5f6']
   },
   'abs': {
-    label: 'ABS (Anti-lock Braking)',
-    desc: 'vx, ω · with slip & friction',
+    label: 'ABS (State Space)',
+    desc: 'Sx, Vx, λ · Explicit State Space',
     payload: {
-      state_vars: ['vx', 'omega'],
-      state_derivatives: ['dvx', 'domega'],
-      targets: ['dvx', 'domega'],
-      equations: [
-        'dvx + Ff / mass',
-        'domega - (T_road - Tb) / J'
-      ],
+      state_vars: ['Sx', 'Vx', 'lambda_val'],
+      state_derivatives: ['dSx', 'dVx', 'dlambda_val'],
+      targets: ['dSx', 'dVx', 'dlambda_val'],
       intermediates: {
-        lambda_val: '(vx - omega * R) / vx',
-        mu: '(1.2801 * (1.0 - exp(-23.99 * lambda_val)) - 0.52 * lambda_val) * exp(-0.03 * vx)',
-        Ff: 'mu * mass * g',
-        T_road: 'Ff * R'
+        FN: 'm * g',
+        mu: '(1.2801 * (1.0 - exp(-23.99 * lambda_val)) - 0.52 * lambda_val) * exp(-0.03 * Vx)'
       },
       conditions: {
-        Tb: { 'lambda_val > 0.20': '0.0', 'default': 'torque' }
+        Tb: {
+          'lambda_val > 0.20': '0.0',
+          'default': 'torque'
+        }
       },
-      params: { mass: 250.0, torque: 1200.0, J: 1.0, R: 0.32, g: 9.81 },
-      z0: [30.0, 93.75],
+      equations: [
+        'dSx - Vx', // x1_dot = x2
+        'm * dVx + mu * FN', // x2_dot = -mu*FN / m
+        // x3_dot = (-mu*FN/Vx)*((1-λ)/m + R²/Jw) + (R/(Jw*Vx))*Tb
+        'dlambda_val - ((-mu * FN / Vx) * ((1.0 - lambda_val) / m + R**2 / Jw) + (R / (Jw * Vx)) * Tb)'
+      ],
+      params: {
+        m: 250.0,
+        torque: 1200.0,
+        Jw: 1.0,
+        R: 0.32,
+        g: 9.81
+      },
+      z0: [0.0, 30.0, 0.0],
       t_end: 3.0,
       steps: 300,
     },
-    colors: ['#64b5f6', '#ef5350']
+    colors: ['#64b5f6', '#ef5350', '#42e695']
   }
 };
 

@@ -1,17 +1,41 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import axios from 'axios';
+import  { useState, useEffect, useMemo, useCallback } from 'react';
+import axios, { AxiosError } from 'axios';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, ReferenceLine
 } from 'recharts';
 
-// ─── API endpoint (CHANGE THIS to your Flask backend) ──────────────
-// ❌ This should NOT be your frontend URL (e.g., not 'https://pid-simulator-9pft.vercel.app')
-// ✅ Use your Flask server: e.g., 'http://127.0.0.1:3000' or deployed backend URL
-const API_BASE = 'http://127.0.0.1:3000'; // ← UPDATE THIS
+// ─── Type Definitions ──────────────
 
-// ─── System configurations (unchanged) ──────────────────────────────
-const SYSTEMS = {
+interface SimulationPayload {
+  state_vars: string[];
+  state_derivatives: string[];
+  targets: string[];
+  equations: string[];
+  params: Record<string, number>;
+  z0: number[];
+  t_end: number;
+  steps: number;
+  intermediates?: Record<string, string>;
+  conditions?: Record<string, Record<string, string>>;
+}
+
+interface SystemConfig {
+  label: string;
+  desc: string;
+  payload: SimulationPayload;
+  colors: string[];
+}
+
+interface DataPoint {
+  time: number;
+  [key: string]: number;
+}
+
+// ─── API Configuration ──────────────
+const API_BASE = 'https://pid-simulator-7llg.vercel.app';
+
+const SYSTEMS: Record<string, SystemConfig> = {
   '1dof': {
     label: '1-DOF Mass-Spring-Damper',
     desc: 'x, dx · m·ddx + c·dx + k·x = F',
@@ -54,10 +78,7 @@ const SYSTEMS = {
       targets: ['dh'],
       intermediates: { Qout: 'c * sqrt(h)' },
       conditions: {
-        Qin: {
-          'h > 3.5': '0.0',
-          'default': 'input_flow'
-        }
+        Qin: { 'h > 3.5': '0.0', 'default': 'input_flow' }
       },
       equations: ['dh - (Qin - Qout) / A'],
       params: { A: 1.5, c: 0.35, input_flow: 0.8 },
@@ -82,14 +103,8 @@ const SYSTEMS = {
         tau: 'Kp_r * (r_target - r) - Kd_r * dr - Kp_theta * theta - Kd_theta * dtheta'
       },
       params: {
-        mb: 0.1,
-        J_beam: 0.05,
-        g: 9.81,
-        r_target: 0.0,
-        Kp_r: 2.5,
-        Kd_r: 1.2,
-        Kp_theta: 5.0,
-        Kd_theta: 1.5
+        mb: 0.1, J_beam: 0.05, g: 9.81, r_target: 0.0,
+        Kp_r: 2.5, Kd_r: 1.2, Kp_theta: 5.0, Kd_theta: 1.5
       },
       z0: [0.4, 0.1, 0.0, 0.0],
       t_end: 8.0,
@@ -115,18 +130,9 @@ const SYSTEMS = {
         T_road: 'Ff * R'
       },
       conditions: {
-        Tb: {
-          'lambda_val > 0.20': '0.0',
-          'default': 'torque'
-        }
+        Tb: { 'lambda_val > 0.20': '0.0', 'default': 'torque' }
       },
-      params: {
-        mass: 250.0,
-        torque: 1200.0,
-        J: 1.0,
-        R: 0.32,
-        g: 9.81
-      },
+      params: { mass: 250.0, torque: 1200.0, J: 1.0, R: 0.32, g: 9.81 },
       z0: [30.0, 93.75],
       t_end: 3.0,
       steps: 300,
@@ -137,51 +143,43 @@ const SYSTEMS = {
 
 const SYSTEM_KEYS = Object.keys(SYSTEMS);
 
-// ─── API call using axios ────────────────────────────────────────────
-async function runSimulation(payload) {
+// ─── API Helper ──────────────
+async function runSimulation(payload: SimulationPayload): Promise<DataPoint[]> {
   try {
-    const response = await axios.post(`${API_BASE}/api/simulate/universal`, payload, {
+    const response = await axios.post<DataPoint[]>(`${API_BASE}/api/simulate/universal`, payload, {
       headers: { 'Content-Type': 'application/json' },
     });
     return response.data;
   } catch (error) {
-    // Extract error message from axios error response
-    if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      const errMsg = error.response.data?.error || `HTTP ${error.response.status}`;
-      throw new Error(errMsg);
-    } else if (error.request) {
-      // The request was made but no response was received
-      throw new Error('No response from server. Please check your network and CORS settings.');
+    const err = error as AxiosError<{ error?: string }>;
+    if (err.response) {
+      throw new Error(err.response.data?.error || `HTTP ${err.response.status}`);
+    } else if (err.request) {
+      throw new Error('No response from server. Check your CORS/Network.');
     } else {
-      // Something happened in setting up the request that triggered an Error
-      throw new Error(error.message || 'Request failed');
+      throw new Error(err.message || 'Request failed');
     }
   }
 }
 
-// ─── Main Component ──────────────────────────────────────────────────
 export default function SimulinkBuilderPage() {
-  // ... (all state, hooks, and handlers remain exactly the same) ...
-
   // ── State ──
-  const [activeSystem, setActiveSystem] = useState('1dof');
-  const [params, setParams] = useState(() => ({ ...SYSTEMS['1dof'].payload.params }));
-  const [z0, setZ0] = useState(() => [...SYSTEMS['1dof'].payload.z0]);
-  const [tEnd, setTEnd] = useState(SYSTEMS['1dof'].payload.t_end);
-  const [steps, setSteps] = useState(SYSTEMS['1dof'].payload.steps);
+  const [activeSystem, setActiveSystem] = useState<string>('1dof');
+  const [params, setParams] = useState<Record<string, number>>(() => ({ ...SYSTEMS['1dof'].payload.params }));
+  const [z0, setZ0] = useState<number[]>(() => [...SYSTEMS['1dof'].payload.z0]);
+  const [tEnd, setTEnd] = useState<number>(SYSTEMS['1dof'].payload.t_end);
+  const [steps, setSteps] = useState<number>(SYSTEMS['1dof'].payload.steps);
 
-  const [chartData, setChartData] = useState([]);
-  const [stateVars, setStateVars] = useState(SYSTEMS['1dof'].payload.state_vars);
-  const [colors, setColors] = useState(SYSTEMS['1dof'].colors);
+  const [chartData, setChartData] = useState<DataPoint[]>([]);
+  const [stateVars, setStateVars] = useState<string[]>(SYSTEMS['1dof'].payload.state_vars);
+  const [colors, setColors] = useState<string[]>(SYSTEMS['1dof'].colors);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [lastRunTime, setLastRunTime] = useState(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastRunTime, setLastRunTime] = useState<string | null>(null);
 
   // ── Load system ──
-  const loadSystem = useCallback((key) => {
+  const loadSystem = useCallback((key: string) => {
     const sys = SYSTEMS[key];
     if (!sys) return;
     setActiveSystem(key);
@@ -197,11 +195,11 @@ export default function SimulinkBuilderPage() {
   }, []);
 
   // ── Handlers ──
-  const handleParamChange = useCallback((key, val) => {
+  const handleParamChange = useCallback((key: string, val: number) => {
     setParams((prev) => ({ ...prev, [key]: val }));
   }, []);
 
-  const handleZ0Change = useCallback((idx, val) => {
+  const handleZ0Change = useCallback((idx: number, val: number) => {
     setZ0((prev) => {
       const next = [...prev];
       next[idx] = val;
@@ -219,12 +217,12 @@ export default function SimulinkBuilderPage() {
     setError(null);
   }, [activeSystem]);
 
-  // ── Run simulation ──
+  // ── Run Simulation ──
   const runSim = useCallback(async () => {
     const sys = SYSTEMS[activeSystem];
     if (!sys) return;
 
-    const payload = {
+    const payload: SimulationPayload = {
       state_vars: sys.payload.state_vars,
       state_derivatives: sys.payload.state_derivatives,
       targets: sys.payload.targets,
@@ -234,12 +232,8 @@ export default function SimulinkBuilderPage() {
       t_end: tEnd,
       steps: Math.floor(steps),
     };
-    if (sys.payload.intermediates) {
-      payload.intermediates = { ...sys.payload.intermediates };
-    }
-    if (sys.payload.conditions) {
-      payload.conditions = { ...sys.payload.conditions };
-    }
+    if (sys.payload.intermediates) payload.intermediates = sys.payload.intermediates;
+    if (sys.payload.conditions) payload.conditions = sys.payload.conditions;
 
     setLoading(true);
     setError(null);
@@ -247,14 +241,10 @@ export default function SimulinkBuilderPage() {
 
     try {
       const result = await runSimulation(payload);
-      if (Array.isArray(result) && result.length > 0) {
-        setChartData(result);
-        setLastRunTime(((performance.now() - start) / 1000).toFixed(2));
-      } else {
-        throw new Error('Unexpected response format');
-      }
+      setChartData(result);
+      setLastRunTime(((performance.now() - start) / 1000).toFixed(2));
     } catch (err) {
-      setError(err.message || 'Simulation failed');
+      setError(err instanceof Error ? err.message : 'Simulation failed');
       setChartData([]);
     } finally {
       setLoading(false);
@@ -263,7 +253,7 @@ export default function SimulinkBuilderPage() {
 
   // ── Keyboard shortcut ──
   useEffect(() => {
-    const handler = (e) => {
+    const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         runSim();
@@ -273,30 +263,25 @@ export default function SimulinkBuilderPage() {
     return () => window.removeEventListener('keydown', handler);
   }, [runSim]);
 
-  // ── Load initial ──
   useEffect(() => {
     loadSystem('1dof');
-  }, []);
+  }, [loadSystem]);
 
-  // ── Derived ──
   const z0Entries = useMemo(() => {
     const sys = SYSTEMS[activeSystem];
     if (!sys) return [];
     return sys.payload.state_vars.map((name, idx) => ({ name, idx, val: z0[idx] ?? 0 }));
   }, [activeSystem, z0]);
 
-  // ── Custom Tooltip ──
-  const CustomTooltip = ({ active, payload, label }) => {
+  // ── Tooltip ──
+  const CustomTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload || !payload.length) return null;
     return (
       <div className="bg-[#0e151e] border border-[#2a3648] rounded-xl px-4 py-3 text-sm text-[#e8edf5] shadow-2xl">
         <div className="text-[#7a8fa8] mb-1">t = {label.toFixed(3)}</div>
-        {payload.map((p, i) => (
+        {payload.map((p: any, i: number) => (
           <div key={i} className="flex items-center gap-2">
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-sm"
-              style={{ background: p.color || p.stroke }}
-            />
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: p.color || p.stroke }} />
             <span>{p.name}:</span>
             <span className="font-medium text-white">{p.value.toFixed(4)}</span>
           </div>
@@ -305,12 +290,9 @@ export default function SimulinkBuilderPage() {
     );
   };
 
-  // ─── Render ───
   return (
     <div className="font-sans bg-[#0b0e14] text-[#e8edf5] min-h-screen p-6 max-w-7xl mx-auto">
       <div className="flex flex-col gap-6">
-
-        {/* Header */}
         <header className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#232a36]">
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight bg-gradient-to-r from-[#64b5f6] to-[#42e695] bg-clip-text text-transparent">
             ⚙ Control System Simulator
@@ -320,13 +302,8 @@ export default function SimulinkBuilderPage() {
           </span>
         </header>
 
-        {/* Grid */}
         <div className="grid grid-cols-1 md:grid-cols-[340px_1fr] gap-6">
-
-          {/* ─── LEFT PANEL ─── */}
           <div className="flex flex-col gap-5">
-
-            {/* System Selector */}
             <div className="bg-[#131a24] rounded-2xl border border-[#212b38] p-5">
               <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[#7a8fa8] mb-4">
                 <span className="w-2 h-2 rounded-full bg-[#64b5f6] inline-block" />
@@ -347,9 +324,7 @@ export default function SimulinkBuilderPage() {
                       }`}
                     >
                       {sys.label}
-                      <span className={`block text-[10px] font-normal mt-0.5 ${
-                        isActive ? 'text-[#8aafd0]' : 'text-[#6a7f98]'
-                      }`}>
+                      <span className={`block text-[10px] font-normal mt-0.5 ${isActive ? 'text-[#8aafd0]' : 'text-[#6a7f98]'}`}>
                         {sys.desc}
                       </span>
                     </button>
@@ -358,7 +333,6 @@ export default function SimulinkBuilderPage() {
               </div>
             </div>
 
-            {/* Parameters */}
             <div className="bg-[#131a24] rounded-2xl border border-[#212b38] p-5">
               <div className="flex items-center justify-between text-sm font-semibold uppercase tracking-wider text-[#7a8fa8] mb-4">
                 <span className="flex items-center gap-2">
@@ -373,7 +347,7 @@ export default function SimulinkBuilderPage() {
                 </button>
               </div>
 
-              <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1 custom-scroll">
+              <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
                 {Object.entries(params).map(([key, val]) => (
                   <div key={key} className="flex items-center gap-2.5 bg-[#0e151e] px-3 py-1.5 rounded-xl border border-[#1e2836]">
                     <label className="text-sm font-medium text-[#b8ccdf] min-w-[54px] font-mono">{key}</label>
@@ -381,25 +355,16 @@ export default function SimulinkBuilderPage() {
                       type="number"
                       step="any"
                       value={val}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        if (raw === '') {
-                          handleParamChange(key, 0);
-                        } else {
-                          const v = parseFloat(raw);
-                          handleParamChange(key, isNaN(v) ? 0 : v);
-                        }
-                      }}
+                      onChange={(e) => handleParamChange(key, parseFloat(e.target.value) || 0)}
                       className="flex-1 bg-transparent border-none text-[#e8edf5] text-sm py-1.5 font-mono outline-none min-w-0"
                     />
                     <span className="text-xs text-[#5a7088] min-w-[40px] text-right font-mono">
-                      {typeof val === 'number' ? val.toFixed(3) : val}
+                      {val.toFixed(3)}
                     </span>
                   </div>
                 ))}
               </div>
 
-              {/* z0 */}
               {z0Entries.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-[#1a2330]">
                   <div className="text-sm font-medium text-[#7a8fa8] mb-2">Initial conditions (z₀)</div>
@@ -411,15 +376,7 @@ export default function SimulinkBuilderPage() {
                           type="number"
                           step="any"
                           value={val}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            if (raw === '') {
-                              handleZ0Change(idx, 0);
-                            } else {
-                              const v = parseFloat(raw);
-                              handleZ0Change(idx, isNaN(v) ? 0 : v);
-                            }
-                          }}
+                          onChange={(e) => handleZ0Change(idx, parseFloat(e.target.value) || 0)}
                           className="bg-transparent border-none text-[#e8edf5] text-sm w-16 font-mono outline-none text-right"
                         />
                       </div>
@@ -428,7 +385,6 @@ export default function SimulinkBuilderPage() {
                 </div>
               )}
 
-              {/* t_end & steps */}
               <div className="flex gap-4 mt-4 pt-4 border-t border-[#1a2330]">
                 <div className="flex-1">
                   <label className="text-xs text-[#7a8fa8] block mb-1">t_end</label>
@@ -436,10 +392,7 @@ export default function SimulinkBuilderPage() {
                     type="number"
                     step="0.5"
                     value={tEnd}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      setTEnd(isNaN(v) ? 1 : v);
-                    }}
+                    onChange={(e) => setTEnd(parseFloat(e.target.value) || 1)}
                     className="w-full bg-[#0e151e] border border-[#1e2836] rounded-xl px-3 py-1.5 text-[#e8edf5] text-sm font-mono outline-none"
                   />
                 </div>
@@ -450,10 +403,7 @@ export default function SimulinkBuilderPage() {
                     step="50"
                     min="50"
                     value={steps}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10);
-                      setSteps(isNaN(v) ? 100 : Math.max(50, v));
-                    }}
+                    onChange={(e) => setSteps(Math.max(50, parseInt(e.target.value) || 100))}
                     className="w-full bg-[#0e151e] border border-[#1e2836] rounded-xl px-3 py-1.5 text-[#e8edf5] text-sm font-mono outline-none"
                   />
                 </div>
@@ -462,19 +412,9 @@ export default function SimulinkBuilderPage() {
               <button
                 onClick={runSim}
                 disabled={loading}
-                className="w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-[#1a6bc4] to-[#3b8fd9] text-white font-semibold text-sm flex items-center justify-center gap-2.5 transition hover:shadow-lg hover:shadow-[#1a6bc4]/30 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
+                className="w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-[#1a6bc4] to-[#3b8fd9] text-white font-semibold text-sm flex items-center justify-center gap-2.5 transition hover:shadow-lg hover:shadow-[#1a6bc4]/30 disabled:opacity-50"
               >
-                {loading ? (
-                  <>
-                    <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Running…
-                  </>
-                ) : (
-                  <>
-                    ▶ Run Simulation
-                    <span className="text-xs opacity-50 font-normal">(⌘⏎)</span>
-                  </>
-                )}
+                {loading ? 'Running…' : '▶ Run Simulation (⌘⏎)'}
               </button>
 
               {error && (
@@ -485,18 +425,13 @@ export default function SimulinkBuilderPage() {
             </div>
           </div>
 
-          {/* ─── RIGHT PANEL ─── */}
           <div className="bg-[#131a24] rounded-2xl border border-[#212b38] p-5 overflow-hidden">
             <div className="flex items-center justify-between text-sm font-semibold uppercase tracking-wider text-[#7a8fa8] mb-4">
               <span className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-[#42e695] inline-block" />
                 Simulation Results
               </span>
-              {lastRunTime && (
-                <span className="text-xs font-normal text-[#4a5a72]">
-                  {chartData.length} pts · {lastRunTime}s
-                </span>
-              )}
+              {lastRunTime && <span className="text-xs font-normal text-[#4a5a72]">{chartData.length} pts · {lastRunTime}s</span>}
             </div>
 
             <div className="bg-[#0e151e] rounded-xl p-2 min-h-[380px] flex items-center justify-center">
@@ -512,55 +447,17 @@ export default function SimulinkBuilderPage() {
                 <ResponsiveContainer width="100%" height={380}>
                   <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1a2330" />
-                    <XAxis
-                      dataKey="time"
-                      stroke="#4a5a72"
-                      tick={{ fill: '#6a7f98', fontSize: 11 }}
-                      tickLine={false}
-                      label={{ value: 'Time (s)', position: 'insideBottom', offset: -6, fill: '#6a7f98', fontSize: 12 }}
-                    />
-                    <YAxis
-                      stroke="#4a5a72"
-                      tick={{ fill: '#6a7f98', fontSize: 11 }}
-                      tickLine={false}
-                      label={{ value: 'State', angle: -90, position: 'insideLeft', fill: '#6a7f98', fontSize: 12 }}
-                    />
+                    <XAxis dataKey="time" stroke="#4a5a72" tick={{ fill: '#6a7f98', fontSize: 11 }} tickLine={false} label={{ value: 'Time (s)', position: 'insideBottom', offset: -6, fill: '#6a7f98', fontSize: 12 }} />
+                    <YAxis stroke="#4a5a72" tick={{ fill: '#6a7f98', fontSize: 11 }} tickLine={false} />
                     <Tooltip content={<CustomTooltip />} />
-                    <Legend
-                      wrapperStyle={{ fontSize: '12px', color: '#b0c4de', paddingTop: '8px' }}
-                      iconType="circle"
-                      iconSize={8}
-                    />
+                    <Legend wrapperStyle={{ fontSize: '12px', color: '#b0c4de', paddingTop: '8px' }} iconType="circle" />
                     {stateVars.map((name, idx) => (
-                      <Line
-                        key={name}
-                        type="monotone"
-                        dataKey={name}
-                        stroke={colors?.[idx % colors.length] || '#64b5f6'}
-                        strokeWidth={2.5}
-                        dot={false}
-                        activeDot={{ r: 4, strokeWidth: 0 }}
-                        isAnimationActive={false}
-                      />
+                      <Line key={name} type="monotone" dataKey={name} stroke={colors?.[idx % colors.length] || '#64b5f6'} strokeWidth={2.5} dot={false} isAnimationActive={false} />
                     ))}
                     <ReferenceLine y={0} stroke="#2a3648" strokeDasharray="2 4" />
                   </LineChart>
                 </ResponsiveContainer>
               )}
-            </div>
-
-            <div className="flex items-center justify-between flex-wrap gap-3 pt-4 mt-4 border-t border-[#1a2330] text-sm text-[#6a7f98]">
-              <div className="flex items-center gap-4 flex-wrap">
-                <span>System: <strong className="text-[#b8ccdf]">{SYSTEMS[activeSystem]?.label || '—'}</strong></span>
-                <span>States: <strong className="text-[#b8ccdf]">{stateVars.join(', ')}</strong></span>
-              </div>
-              <div>
-                {chartData.length > 0 ? (
-                  <span className="text-[#42e695]">✓ Ready</span>
-                ) : (
-                  <span className="text-[#4a5a72]">○ Idle</span>
-                )}
-              </div>
             </div>
           </div>
         </div>

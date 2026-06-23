@@ -14,7 +14,6 @@ import time
 from scipy.integrate import solve_ivp
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
-from sympy import sqrt, exp, sin, cos, log # เพิ่มฟังก์ชันคณิตศาสตร์ที่จำเป็น
 
 load_dotenv()
 
@@ -142,146 +141,153 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 
-# 修复 1: 新增专门的公式解析器，解决 "invalid syntax (<string>, line 1)" 问题
-def parse_equation(equation_str, sym_dict):
-    """
-    处理包含 "=" 的方程式，将其转换为 SymPy 的 Eq() 对象。
-    """
-    if '=' in equation_str:
-        lhs, rhs = equation_str.split('=', 1)
-        lhs_expr = parse_expr(lhs.strip(), local_dict=sym_dict)
-        rhs_expr = parse_expr(rhs.strip(), local_dict=sym_dict)
-        return sp.Eq(lhs_expr, rhs_expr)
-    return parse_expr(equation_str, local_dict=sym_dict)
-
-
 @app.route('/api/simulate/universal', methods=['POST'])
 def universal_simulate():
     try:
         data = request.get_json() or {}
-        
+        return_pipeline = data.get('return_pipeline', False)
+
         state_vars_names = data.get('state_vars', [])       
         state_deriv_names = data.get('state_derivatives', []) 
-        target_names = data.get('targets', [])               
+        target_names = data.get('targets', [])              
         user_params = data.get('params', {})                
         equations_strs = data.get('equations', [])   
+        intermediates_data = data.get('intermediates', {})
+        conditions_data = data.get('conditions', {})
 
-        # 1. Base Symbols
-        sym_dict = {'t': sp.Symbol('t'), 'sqrt': sp.sqrt, 'exp': sp.exp, 'sin': sp.sin, 'cos': sp.cos, 'log': sp.log}
-        all_names = state_vars_names + state_deriv_names + target_names + list(user_params.keys()) + list(data.get('intermediates',{}).keys()) + list(data.get('conditions',{}).keys())
+        # --- Step 0: Create Symbols and Math Functions ---
+        sym_dict = {
+            't': sp.Symbol('t'), 
+            'sqrt': sp.sqrt, 'exp': sp.exp, 
+            'sin': sp.sin, 'cos': sp.cos, 'log': sp.log
+        }
+        all_names = state_vars_names + state_deriv_names + target_names + list(user_params.keys()) + list(intermediates_data.keys()) + list(conditions_data.keys())
         for name in all_names:
-            if name not in sym_dict: sym_dict[name] = sp.Symbol(name)
+            if name not in sym_dict: 
+                sym_dict[name] = sp.Symbol(name)
 
-        # 2. Replace constant params in symbols
+        # --- Step 1: Replace Parameters with Floats ---
         param_subs = {sym_dict[k]: float(v) for k, v in user_params.items()}
 
-        # 3. Parse INTERMEDIATES (Substitute params immediately)
-        intermediates_data = data.get('intermediates', {})
-        inter_exprs = {k: parse_expr(v, local_dict=sym_dict).subs(param_subs) for k, v in intermediates_data.items()}
+        # --- Step 2: Pre-Compile Intermediates (Lambdify) ---
+        inter_args = [sym_dict[n] for n in state_vars_names] + [sp.Symbol('t')]
+        inter_funcs = {}
+        for k, v in intermediates_data.items():
+            expr = parse_expr(v, local_dict=sym_dict).subs(param_subs)
+            inter_funcs[k] = sp.lambdify(inter_args, expr, 'numpy')
 
-        # 4. Parse CONDITIONS (เตรียม Logic สำหรับ Python Runtime)
-        conditions_data = data.get('conditions', {})
+        # --- Step 3: Pre-Compile Conditions (Lambdify) ---
+        cond_args = [sym_dict[n] for n in state_vars_names] + [sp.Symbol('t')] + [sym_dict[n] for n in intermediates_data.keys()]
+        cond_funcs = {}
         
-        # 5. Parse EQUATIONS
+        for var_name, cond_map in conditions_data.items():
+            logic_blocks = []
+            default_val = None
+            for cond_str, val_str in cond_map.items():
+                if cond_str.lower() in ['default', 'true', 'else']:
+                    default_val = float(parse_expr(val_str, local_dict=sym_dict).subs(param_subs))
+                else:
+                    cond_lambda = sp.lambdify(cond_args, parse_expr(cond_str, local_dict=sym_dict), 'numpy')
+                    val_lambda = sp.lambdify(cond_args, parse_expr(val_str, local_dict=sym_dict).subs(param_subs), 'numpy')
+                    logic_blocks.append((cond_lambda, val_lambda))
+            cond_funcs[var_name] = (logic_blocks, default_val)
+
+        # --- Step 4: Solve Algebraic System Simultaneously ---
         def parse_equation(eq_str):
             if '=' in eq_str:
                 lhs, rhs = eq_str.split('=', 1)
                 return sp.Eq(parse_expr(lhs.strip(), local_dict=sym_dict), parse_expr(rhs.strip(), local_dict=sym_dict))
-            return parse_expr(eq_str, local_dict=sym_dict)
+            return sp.Eq(parse_expr(eq_str, local_dict=sym_dict), 0)
 
         parsed_eqs = [parse_equation(eq) for eq in equations_strs]
         target_symbols = [sym_dict[name] for name in target_names]
-
-        solved = sp.solve(parsed_eqs, target_symbols)
-        if not solved:
-            return jsonify({"error": "SymPy ไม่สามารถแก้ระบบสมการหา Target ที่ระบุได้"}), 400
-
-        # 6. แก้สมการหา Target และแทนค่า Params (คง Symbol `conditions` และ `intermediates` ไว้)
-        solved_exprs = {}
-        for target_sym in target_symbols:
-            expr = solved[target_sym] if isinstance(solved, dict) else solved[0]
-            solved_exprs[str(target_sym)] = expr.subs(param_subs)
-
-        # 7. สร้าง Compiled Functions สำหรับ ODE Callback
-        all_lambdify_args = [sym_dict[n] for n in state_vars_names] + [sym_dict[n] for n in intermediates_data.keys()] + [sym_dict[n] for n in conditions_data.keys()]
         
-        compiled_derivatives = {}
-        for name, expr in solved_exprs.items():
-            compiled_derivatives[name] = sp.lambdify(all_lambdify_args, expr, 'numpy')
+        # Explicitly use dict=True to guarantee a dictionary output list structure
+        solved = sp.solve(parsed_eqs, target_symbols, dict=True)
+        if not solved:
+            return jsonify({"error": "SymPy could not solve the algebraic target equations."}), 400
+        
+        solved_dict = solved[0]
 
-        # 8. สร้าง Compiled Functions สำหรับตัวแปรตัวกลาง (Intermediates)
-        inter_funcs = {}
-        inter_args = [sym_dict[n] for n in state_vars_names]
-        for k, expr in inter_exprs.items():
-            inter_funcs[k] = sp.lambdify(inter_args, expr, 'numpy')
-
-        # 9. สร้าง Python Logic สำหรับ Conditions (แทนที่ Piecewise)
-        condition_logic = {}
-        for cond_var_name, cond_map in conditions_data.items():
-            logic_list = []
-            default_val = None
+        # --- Step 5: Parameter Substitution & Lambdify Derivatives ---
+        solved_exprs = {}
+        equations_response = []
+        for target_sym in target_symbols:
+            expr = solved_dict.get(target_sym)
+            if expr is None:
+                continue
+            substituted_expr = expr.subs(param_subs)
+            equations_response.append(f"{target_sym} = {substituted_expr}")
             
-            for cond_str, val_str in cond_map.items():
-                if cond_str.lower() in ['default', 'true', 'else']:
-                    # ถ้าเป็น Default ให้แปลงเป็นค่าคงที่ทันที
-                    default_val = float(parse_expr(val_str, local_dict=sym_dict).subs(param_subs))
-                else:
-                    # สร้าง Checker (คืน True/False)
-                    cond_lambda = sp.lambdify(inter_args, parse_expr(cond_str, local_dict=sym_dict), 'numpy')
-                    # สร้าง Value Assigner
-                    val_lambda = sp.lambdify(inter_args, parse_expr(val_str, local_dict=sym_dict).subs(param_subs), 'numpy')
-                    logic_list.append((cond_lambda, val_lambda))
-            
-            # เก็บรายการเช็คและค่า Default
-            condition_logic[cond_var_name] = (logic_list, default_val)
+            # Only track the targets required for state derivatives evaluation
+            if str(target_sym) in state_deriv_names:
+                solved_exprs[str(target_sym)] = substituted_expr
 
-        # 10. ODE Callback (ทำงานใน Python จริง ไม่ใช้ SymPy Piecewise)
+        deriv_args = [sym_dict[n] for n in state_vars_names] + [sp.Symbol('t')] + [sym_dict[n] for n in intermediates_data.keys()] + [sym_dict[n] for n in conditions_data.keys()]
+        deriv_funcs = {name: sp.lambdify(deriv_args, expr, 'numpy') for name, expr in solved_exprs.items()}
+
+        # --- Step 6: Build Pipeline Inspection Data ---
+        pipeline_steps = {}
+        if return_pipeline:
+            pipeline_steps = {
+                "1. Raw Input": equations_strs,
+                "2. Parsed": [str(eq) for eq in parsed_eqs],
+                "3. Solved System": {str(k): str(v) for k, v in solved_dict.items()},
+                "4. Substituted": {k: str(v) for k, v in solved_exprs.items()},
+                "5. Pre-Compiled Lambda Args": [str(a) for a in deriv_args],
+            }
+
+        # --- Step 7: Optimized High-Speed ODE Callback Loop ---
         def ode_callback(t_curr, z):
-            # คำนวณ Intermediates (เช่น lambda_val)
-            inter_values = {}
-            for name, func in inter_funcs.items():
-                inter_values[name] = float(func(*z))
-            
-            # คำนวณ Conditions (ใช้ Logic Python ตรวจสอบ)
-            cond_values = {}
-            for var_name, (checks, default) in condition_logic.items():
+            # A. Evaluate Intermediates Safely
+            inter_vals = {}
+            args_1 = list(z) + [t_curr]
+            for k, func in inter_funcs.items():
+                try:
+                    res = func(*args_1)
+                    inter_vals[k] = float(res.item() if isinstance(res, np.ndarray) else res)
+                except Exception:
+                    inter_vals[k] = 0.0
+
+            # B. Evaluate Conditional States Safely (ABS Loop Logic)
+            cond_vals = {}
+            args_2 = list(z) + [t_curr] + [inter_vals[n] for n in intermediates_data.keys()]
+            for var_name, (checks, default) in cond_funcs.items():
                 found = False
-                # `args` ที่จะป้อนให้กับ Condition และ Value lambda
-                args_for_checks = list(z) + [inter_values[n] for n in intermediates_data.keys()]
-                
                 for cond_lambda, val_lambda in checks:
                     try:
-                        if bool(cond_lambda(*args_for_checks)):
-                            cond_values[var_name] = float(val_lambda(*args_for_checks))
+                        if bool(cond_lambda(*args_2)):
+                            res = val_lambda(*args_2)
+                            cond_vals[var_name] = float(res.item() if isinstance(res, np.ndarray) else res)
                             found = True
                             break
                     except Exception:
                         pass
-                
                 if not found and default is not None:
-                    cond_values[var_name] = default
-            
-            # คำนวณ Derivatives (Targets) โดยส่งตัวแปรทั้งหมดลงไป
-            eval_args = list(z) + [inter_values[n] for n in intermediates_data.keys()] + [cond_values[n] for n in conditions_data.keys()]
-            
+                    cond_vals[var_name] = default
+
+            # C. Evaluate System Accelerations / Derivatives
+            eval_args = list(z) + [t_curr] + [inter_vals[n] for n in intermediates_data.keys()] + [cond_vals[n] for n in conditions_data.keys()]
             evaluated_targets = {}
-            for name, func in compiled_derivatives.items():
+            for name, func in deriv_funcs.items():
                 try:
-                    evaluated_targets[name] = float(func(*eval_args))
-                except (ZeroDivisionError, ValueError):
+                    res = func(*eval_args)
+                    evaluated_targets[name] = float(res.item() if isinstance(res, np.ndarray) else res)
+                except Exception:
                     evaluated_targets[name] = 0.0
 
+            # D. Map Outputs to the Proper State Ordering
             dz_dt = []
             for name in state_deriv_names:
-                if name in state_vars_names: # ถ้าเป็น State ตายตัว (เช่น v = dx/dt)
+                if name in state_vars_names:
                     dz_dt.append(z[state_vars_names.index(name)])
-                elif name in evaluated_targets: # ถ้าเป็นความเร่งหรือแรง (เช่น a = dV/dt)
+                elif name in evaluated_targets:
                     dz_dt.append(evaluated_targets[name])
                 else:
                     dz_dt.append(0.0)
             return dz_dt
 
-        # 11. Run Simulation
+        # --- Step 8: Execute Numerical IVP Solver ---
         z0 = [float(val) for val in data.get('z0', [])]
         t_end = float(data.get('t_end', 3.0))
         steps = int(data.get('steps', 300))
@@ -289,50 +295,30 @@ def universal_simulate():
 
         sol = solve_ivp(ode_callback, [0, t_end], z0, t_eval=t_eval, method='RK45')
 
-        # 12. Format Data to send back
+        # --- Step 9: Structure Response Array ---
         chart_data = []
         for i in range(len(sol.t)):
             point = {"time": float(round(sol.t[i], 3))}
             for j, name in enumerate(state_vars_names):
-                val = sol.y[j][i]
-                if name == 'omega' and 'R' in user_params:
-                    point['wr'] = float(round(max(0.0, val * float(user_params['R'])), 2))
-                point[name] = float(round(max(0.0, val), 4)) if name == 'vx' else float(round(val, 4))
+                val = sol.y[j][i] if i < len(sol.y[j]) else 0.0
+                point[name] = float(round(val, 4))
             chart_data.append(point)
 
-        return jsonify(chart_data), 200
+        response_body = {
+            "success": bool(sol.success),
+            "data": chart_data,
+            "equations": equations_response,
+            "initial_state": {name: float(z0[i]) for i, name in enumerate(state_vars_names)}
+        }
+        if return_pipeline:
+            response_body["pre_solve_pipeline"] = pipeline_steps
+
+        return jsonify(response_body), 200
 
     except Exception as e:
-        # เพิ่ม traceback เพื่อดู Error จริงๆ ตอน Debug
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-@app.route('/api/simulate/pid', methods=['POST'])
-def pid_simulate():
-    data = request.get_json() or {}
-    Kp = data.get('Kp', 1.0)
-    Ki = data.get('Ki', 0.1)
-    Kd = data.get('Kd', 0.05)
-    setpoint = data.get('setpoint', 50.0)
-    t_end = data.get('t_end', 10.0)
-    dt = data.get('dt', 0.1)
-    z0 = data.get('z0', 0.0)
-    
-    pid = PIDController(Kp, Ki, Kd, setpoint) # 调用已补充的 PID 类
-    results = []
-    state = z0
-    steps = int(t_end / dt)
-    
-    for i in range(steps):
-        t = i * dt
-        u = pid.compute(state, dt)
-        dzdt = -0.1 * state + u
-        state += dzdt * dt
-        results.append({"time": round(t, 2), "value": round(float(state), 4)})
-        
-    return jsonify(results), 200
-
 
 if __name__ == '__main__':
     app.run(debug=True, port=3000)

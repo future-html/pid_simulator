@@ -1,490 +1,254 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import axios, { AxiosError } from 'axios';
+import React, { useState, useEffect } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, ReferenceLine
-} from 'recharts';
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
+import axios from "axios";
 
-// ─── Type Definitions ──────────────
-
-interface SimulationPayload {
-  state_vars: string[];
-  state_derivatives: string[];
-  targets: string[];
-  equations: string[];
-  params: Record<string, number>;
-  z0: number[];
-  t_end: number;
-  steps: number;
-  intermediates?: Record<string, string>;
-  conditions?: Record<string, Record<string, string>>;
-}
-
-interface SystemConfig {
-  label: string;
-  desc: string;
-  payload: SimulationPayload;
-  colors: string[];
-}
-
-interface DataPoint {
-  time: number;
-  [key: string]: number;
-}
-
-// ─── API Configuration ──────────────
-const API_BASE = 'https://pid-simulator-7llg.vercel.app';
-
-// ─── Corrected Mathematical Models ──────────────
-const SYSTEMS: Record<string, SystemConfig> = {
-  '1dof': {
-    label: '1-DOF Mass-Spring-Damper',
-    desc: 'x, dx · ms² + cs + k = F',
-    payload: {
-      state_vars: ['x', 'dx'],
-      state_derivatives: ['dx', 'ddx'],
-      targets: ['ddx'],
-      equations: ['m*ddx + c*dx + k*x - F'],
-      params: { m: 2.0, c: 0.8, k: 25.0, F: 5.0 },
-      z0: [0.0, 0.0],
-      t_end: 10.0,
-      steps: 500,
+// 1. Base Payloads ของแต่ละโมเดล
+const MODEL_BASES = {
+  "Ball & Beam": {
+    state_vars: ["r", "v"],
+    state_derivatives: ["v", "a"],
+    targets: ["a"],
+    params: {
+      g: 9.8,
+      m: 0.1,
+      R: 0.05,
+      J: 0.0002,
+      Kp: 10.0,
+      Kd: 2.0,
+      r_target: 0.5,
     },
-    colors: ['#64b5f6', '#42e695']
+    intermediates: { theta: "(Kp * (r_target - r) + Kd * (-v))" },
+    equations: ["a = - (m * g / (J / (R**2) + m)) * theta"],
+    z0: [0.0, 0.0],
+    t_end: 5.0,
+    steps: 500,
   },
-  '2dof': {
-    label: '2-DOF Coupled Mass-Spring',
-    desc: 'x₁, x₂ · Include c3 and k3',
-    payload: {
-      state_vars: ['x1', 'x2', 'dx1', 'dx2'],
-      state_derivatives: ['dx1', 'dx2', 'ddx1', 'ddx2'],
-      targets: ['ddx1', 'ddx2'],
-      equations: [
-        'm1*ddx1 + (c1 + c2)*dx1 - c2*dx2 + (k1 + k2)*x1 - k2*x2 - F1',
-        // Corrected Equation based on reference: added c3 and k3
-        'm2*ddx2 - c2*dx1 + (c2 + c3)*dx2 - k2*x1 + (k2 + k3)*x2 - F2'
-      ],
-      params: { m1: 10.0, m2: 5.0, k1: 100.0, k2: 50.0, k3: 20.0, c1: 5.0, c2: 2.0, c3: 1.0, F1: 0.0, F2: 0.0 },
-      z0: [1.0, 0.0, 0.0, 0.0],
-      t_end: 10.0,
-      steps: 1000,
-    },
-    colors: ['#64b5f6', '#42e695', '#ffb74d', '#ef5350']
+  "Tank Level (PID)": {
+    state_vars: ["h", "ei"],
+    state_derivatives: ["dh_dt", "dei_dt"],
+    targets: ["dh_dt", "dei_dt", "q_in"],
+    params: { A: 1.0, Cv: 0.5, r: 2.0, Kp: 3.0, Ki: 0.1, Kd: 0.05 },
+    intermediates: {},
+    equations: [
+      "dei_dt = (r - h)",
+      "q_in = Kp * (r - h) + Ki * ei + Kd * (-dh_dt)",
+      "dh_dt = (q_in - Cv * sqrt(h)) / A",
+    ],
+    z0: [1.0, 0.0],
+    t_end: 20.0,
+    steps: 500,
   },
-  'tank': {
-    label: 'Tank Level (PID)',
-    desc: 'h · A·dh = Qin(PID) − Qout',
-    payload: {
-      state_vars: ['h', 'int_e'], // Added integral of error state for Ki
-      state_derivatives: ['dh', 'd_int_e'],
-      targets: ['dh', 'd_int_e'],
-      intermediates: {
-        e: 'r_target - h',
-        Qout: 'Cv * sqrt(h)'
-      },
-      equations: [
-        'd_int_e - e',
-        // Algebraic resolution of PID: dh = (Kp*e + Ki*int_e + Kd*(-dh) - Qout)/A
-        // Becomes: (A + Kd)*dh = Kp*e + Ki*int_e - Qout
-        '(A + Kd) * dh - (Kp * e + Ki * int_e - Qout)'
-      ],
-      params: { A: 1.5, Cv: 0.35, r_target: 3.5, Kp: 0.8, Ki: 0.1, Kd: 0.2 },
-      z0: [0.5, 0.0],
-      t_end: 30.0,
-      steps: 400,
+  "ABS Braking": {
+    state_vars: ["vx", "omega"],
+    state_derivatives: ["vx_dot", "omega_dot"],
+    targets: ["vx_dot", "omega_dot"],
+    params: {
+      m: 1500,
+      mu: 0.8,
+      Fn: 14715,
+      R: 0.3,
+      Jw: 2.0,
+      max_Tb: 4500, // 👈 เพิ่มจาก 2000 เป็น 4500
     },
-    colors: ['#42e695', '#ffb74d']
+    intermediates: { lambda_val: "(vx - omega * R) / vx" },
+    conditions: { Tb: { "lambda_val > 0.2": "0.0", default: "max_Tb" } },
+    equations: ["vx_dot = -mu * Fn / m", "omega_dot = (mu * R * Fn - Tb) / Jw"],
+    z0: [30.0, 100.0],
+    t_end: 3.0,
+    steps: 300,
   },
-  'ballbeam': {
-    label: 'Ball & Beam (PD)',
-    desc: 'r, θ · with Linearized Plant',
-    payload: {
-      state_vars: ['r', 'dr'], // Simulating purely r, since θ is output of PD
-      state_derivatives: ['dr', 'ddr'],
-      targets: ['ddr'],
-      intermediates: {
-        e: 'r_target - r',
-        de: '-dr',
-        theta: 'Kp * e + Kd * de' // Desired beam angle from PD
-      },
-      equations: [
-        // Plant: (J/R² + m)r'' = -mg sin(θ)
-        '(J / R**2 + m) * ddr + m * g * sin(theta)'
-      ],
-      params: {
-        m: 0.1,
-        J: 0.00004, // Inertia
-        R: 0.031,   // Radius
-        g: 9.81,
-        r_target: 0.0,
-        Kp: 0.5,
-        Kd: 0.2
-      },
-      z0: [0.4, 0.0],
-      t_end: 8.0,
-      steps: 400,
-    },
-    colors: ['#ffb74d', '#64b5f6']
-  },
-  'abs': {
-    label: 'ABS (State Space)',
-    desc: 'Sx, Vx, λ · Explicit State Space',
-    payload: {
-      state_vars: ['Sx', 'Vx', 'lambda_val'],
-      state_derivatives: ['dSx', 'dVx', 'dlambda_val'],
-      targets: ['dSx', 'dVx', 'dlambda_val'],
-      intermediates: {
-        FN: 'm * g',
-        mu: '(1.2801 * (1.0 - exp(-23.99 * lambda_val)) - 0.52 * lambda_val) * exp(-0.03 * Vx)'
-      },
-      conditions: {
-        Tb: {
-          'lambda_val > 0.20': '0.0',
-          'default': 'torque'
-        }
-      },
-      equations: [
-        'dSx - Vx', // x1_dot = x2
-        'm * dVx + mu * FN', // x2_dot = -mu*FN / m
-        // x3_dot = (-mu*FN/Vx)*((1-λ)/m + R²/Jw) + (R/(Jw*Vx))*Tb
-        'dlambda_val - ((-mu * FN / Vx) * ((1.0 - lambda_val) / m + R**2 / Jw) + (R / (Jw * Vx)) * Tb)'
-      ],
-      params: {
-        m: 250.0,
-        torque: 1200.0,
-        Jw: 1.0,
-        R: 0.32,
-        g: 9.81
-      },
-      z0: [0.0, 30.0, 0.0],
-      t_end: 3.0,
-      steps: 300,
-    },
-    colors: ['#64b5f6', '#ef5350', '#42e695']
-  }
 };
 
-const SYSTEM_KEYS = Object.keys(SYSTEMS);
+const SimulinkBuilderPage = () => {
+  // State
+  const [modelKey, setModelKey] = useState("Ball & Beam");
+  const [payload, setPayload] = useState(MODEL_BASES["Ball & Beam"]);
+  const [chartData, setChartData] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-// ─── API Helper ──────────────
-async function runSimulation(payload: SimulationPayload): Promise<DataPoint[]> {
-  try {
-    const response = await axios.post<DataPoint[]>(`${API_BASE}/api/simulate/universal`, payload, {
-      headers: { 'Content-Type': 'application/json' },
-    });
-    return response.data;
-  } catch (error) {
-    const err = error as AxiosError<{ error?: string }>;
-    if (err.response) {
-      throw new Error(err.response.data?.error || `HTTP ${err.response.status}`);
-    } else if (err.request) {
-      throw new Error('No response from server. Check your CORS/Network.');
-    } else {
-      throw new Error(err.message || 'Request failed');
-    }
-  }
-}
+  // ฟังก์ชันเปลี่ยนโมเดล
+  const handleModelChange = (e) => {
+    const newKey = e.target.value;
+    setModelKey(newKey);
+    // โหลด Payload เริ่มต้นของโมเดลใหม่
+    setPayload(MODEL_BASES[newKey]);
+    setChartData([]); // เคลียร์กราฟเก่า
+  };
 
-export default function SimulinkBuilderPage() {
-  // ── State ──
-  const [activeSystem, setActiveSystem] = useState<string>('1dof');
-  const [params, setParams] = useState<Record<string, number>>(() => ({ ...SYSTEMS['1dof'].payload.params }));
-  const [z0, setZ0] = useState<number[]>(() => [...SYSTEMS['1dof'].payload.z0]);
-  const [tEnd, setTEnd] = useState<number>(SYSTEMS['1dof'].payload.t_end);
-  const [steps, setSteps] = useState<number>(SYSTEMS['1dof'].payload.steps);
+  // ฟังก์ชันปรับค่าพารามิเตอร์ (แปลงเป็นตัวเลขเสมอ)
+  const handleParamChange = (key, value) => {
+    setPayload((prev) => ({
+      ...prev,
+      params: {
+        ...prev.params,
+        [key]: parseFloat(value) || 0, // ป้องกัน NaN
+      },
+    }));
+  };
 
-  const [chartData, setChartData] = useState<DataPoint[]>([]);
-  const [stateVars, setStateVars] = useState<string[]>(SYSTEMS['1dof'].payload.state_vars);
-  const [colors, setColors] = useState<string[]>(SYSTEMS['1dof'].colors);
-
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastRunTime, setLastRunTime] = useState<string | null>(null);
-
-  // ── Load system ──
-  const loadSystem = useCallback((key: string) => {
-    const sys = SYSTEMS[key];
-    if (!sys) return;
-    setActiveSystem(key);
-    setParams({ ...sys.payload.params });
-    setZ0([...sys.payload.z0]);
-    setTEnd(sys.payload.t_end);
-    setSteps(sys.payload.steps);
-    setStateVars([...sys.payload.state_vars]);
-    setColors([...sys.colors]);
-    setChartData([]);
-    setError(null);
-    setLastRunTime(null);
-  }, []);
-
-  // ── Handlers ──
-  const handleParamChange = useCallback((key: string, val: number) => {
-    setParams((prev) => ({ ...prev, [key]: val }));
-  }, []);
-
-  const handleZ0Change = useCallback((idx: number, val: number) => {
-    setZ0((prev) => {
-      const next = [...prev];
-      next[idx] = val;
-      return next;
-    });
-  }, []);
-
-  const resetParams = useCallback(() => {
-    const sys = SYSTEMS[activeSystem];
-    if (!sys) return;
-    setParams({ ...sys.payload.params });
-    setZ0([...sys.payload.z0]);
-    setTEnd(sys.payload.t_end);
-    setSteps(sys.payload.steps);
-    setError(null);
-  }, [activeSystem]);
-
-  // ── Run Simulation ──
-  const runSim = useCallback(async () => {
-    const sys = SYSTEMS[activeSystem];
-    if (!sys) return;
-
-    const payload: SimulationPayload = {
-      state_vars: sys.payload.state_vars,
-      state_derivatives: sys.payload.state_derivatives,
-      targets: sys.payload.targets,
-      equations: sys.payload.equations,
-      params: { ...params },
-      z0: [...z0],
-      t_end: tEnd,
-      steps: Math.floor(steps),
-    };
-    if (sys.payload.intermediates) payload.intermediates = sys.payload.intermediates;
-    if (sys.payload.conditions) payload.conditions = sys.payload.conditions;
-
+  // ฟังก์ชันกดปุ่ม Simulate
+  const runSimulation = async () => {
+    console.log(payload);
     setLoading(true);
-    setError(null);
-    const start = performance.now();
-
     try {
-      const result = await runSimulation(payload);
-      setChartData(result);
-      setLastRunTime(((performance.now() - start) / 1000).toFixed(2));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Simulation failed');
-      setChartData([]);
+      const response = await axios.post(
+        "http://127.0.0.1:3000/api/simulate/universal",
+        payload,
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+      setChartData(response.data);
+    } catch (error) {
+      console.error("Simulation Error:", error);
+      alert("เกิดข้อผิดพลาดในการจำลอง (อาจเป็น Error ในสมการหรือ API ตีกลับ)");
     } finally {
       setLoading(false);
     }
-  }, [activeSystem, params, z0, tEnd, steps]);
-
-  // ── Keyboard shortcut ──
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        runSim();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [runSim]);
-
-  useEffect(() => {
-    loadSystem('1dof');
-  }, [loadSystem]);
-
-  const z0Entries = useMemo(() => {
-    const sys = SYSTEMS[activeSystem];
-    if (!sys) return [];
-    return sys.payload.state_vars.map((name, idx) => ({ name, idx, val: z0[idx] ?? 0 }));
-  }, [activeSystem, z0]);
-
-  // ── Tooltip ──
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload || !payload.length) return null;
-    return (
-      <div className="bg-[#0e151e] border border-[#2a3648] rounded-xl px-4 py-3 text-sm text-[#e8edf5] shadow-2xl">
-        <div className="text-[#7a8fa8] mb-1">t = {label.toFixed(3)}</div>
-        {payload.map((p: any, i: number) => (
-          <div key={i} className="flex items-center gap-2">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: p.color || p.stroke }} />
-            <span>{p.name}:</span>
-            <span className="font-medium text-white">{p.value.toFixed(4)}</span>
-          </div>
-        ))}
-      </div>
-    );
   };
 
+  // สร้าง Dynamic Line จากการตอบกลับ API
+  const lineKeys =
+    chartData.length > 0
+      ? Object.keys(chartData[0]).filter((key) => key !== "time")
+      : [];
+
+  const colors = [
+    "#8884d8",
+    "#82ca9d",
+    "#ffc658",
+    "#ff7300",
+    "#387908",
+    "#a4de6c",
+  ];
+
   return (
-    <div className="font-sans bg-[#0b0e14] text-[#e8edf5] min-h-screen p-6 max-w-7xl mx-auto">
-      <div className="flex flex-col gap-6">
-        <header className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#232a36]">
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight bg-gradient-to-r from-[#64b5f6] to-[#42e695] bg-clip-text text-transparent">
-            ⚙ Control System Simulator
-          </h1>
-          <span className="text-sm bg-[#1a2330] px-4 py-1.5 rounded-full text-[#8ba0c0] border border-[#2d3a4a]">
-            Flask + React • Recharts
-          </span>
-        </header>
+    <div className="p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen">
+      <h1 className="text-3xl font-bold text-gray-800 mb-6">
+        ⚙️ Interactive Simulation Lab
+      </h1>
 
-        <div className="grid grid-cols-1 md:grid-cols-[340px_1fr] gap-6">
-          <div className="flex flex-col gap-5">
-            <div className="bg-[#131a24] rounded-2xl border border-[#212b38] p-5">
-              <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[#7a8fa8] mb-4">
-                <span className="w-2 h-2 rounded-full bg-[#64b5f6] inline-block" />
-                System
-              </div>
-              <div className="grid grid-cols-2 gap-2.5">
-                {SYSTEM_KEYS.map((key) => {
-                  const sys = SYSTEMS[key];
-                  const isActive = activeSystem === key;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => loadSystem(key)}
-                      className={`text-center p-3 rounded-xl border-2 transition-all text-sm font-medium leading-tight ${
-                        isActive
-                          ? 'bg-[#1a2a3e] border-[#64b5f6] text-white shadow-[0_0_20px_rgba(100,181,246,0.08)]'
-                          : 'bg-[#1a2330] border-[#252f3e] text-[#b0c4de] hover:bg-[#1f2a3a] hover:border-[#3b4a60]'
-                      }`}
-                    >
-                      {sys.label}
-                      <span className={`block text-[10px] font-normal mt-0.5 ${isActive ? 'text-[#8aafd0]' : 'text-[#6a7f98]'}`}>
-                        {sys.desc}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* ส่วนควบคุมโมเดล (Cols 3) */}
+        <div className="lg:col-span-3 bg-white p-6 rounded-xl shadow-md h-fit">
+          <div className="mb-6">
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              เลือกโมเดล:
+            </label>
+            <select
+              value={modelKey}
+              onChange={handleModelChange}
+              className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {Object.keys(MODEL_BASES).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Dynamic Parameter Form */}
+          <div className="mb-4">
+            <h3 className="font-semibold text-gray-700 mb-3 border-b pb-2">
+              ปรับเปลี่ยนค่า Parameters:
+            </h3>
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+              {Object.keys(payload.params).map((paramKey) => (
+                <div key={paramKey} className="flex flex-col">
+                  <label className="text-xs text-gray-500 font-medium mb-1">
+                    {paramKey}
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={payload.params[paramKey]}
+                    onChange={(e) =>
+                      handleParamChange(paramKey, e.target.value)
+                    }
+                    className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                </div>
+              ))}
             </div>
+          </div>
 
-            <div className="bg-[#131a24] rounded-2xl border border-[#212b38] p-5">
-              <div className="flex items-center justify-between text-sm font-semibold uppercase tracking-wider text-[#7a8fa8] mb-4">
-                <span className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-[#ffb74d] inline-block" />
-                  Parameters
-                </span>
-                <button
-                  onClick={resetParams}
-                  className="text-xs bg-transparent border border-[#2d3a4a] text-[#8ba0c0] px-3 py-1.5 rounded-lg hover:bg-[#1a2330] transition"
-                >
-                  ↺ Reset
-                </button>
-              </div>
+          {/* ปุ่ม Submit */}
+          <button
+            onClick={runSimulation}
+            disabled={loading}
+            className={`w-full py-2.5 rounded-lg text-white font-semibold shadow-md transition-all ${loading ? "bg-gray-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}
+          >
+            {loading ? "⏳ กำลังจำลอง..." : "🚀 Run Simulation"}
+          </button>
+        </div>
 
-              <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
-                {Object.entries(params).map(([key, val]) => (
-                  <div key={key} className="flex items-center gap-2.5 bg-[#0e151e] px-3 py-1.5 rounded-xl border border-[#1e2836]">
-                    <label className="text-sm font-medium text-[#b8ccdf] min-w-[54px] font-mono">{key}</label>
-                    <input
-                      type="number"
-                      step="any"
-                      value={val}
-                      onChange={(e) => handleParamChange(key, parseFloat(e.target.value) || 0)}
-                      className="flex-1 bg-transparent border-none text-[#e8edf5] text-sm py-1.5 font-mono outline-none min-w-0"
-                    />
-                    <span className="text-xs text-[#5a7088] min-w-[40px] text-right font-mono">
-                      {val.toFixed(3)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+        {/* ส่วนแสดงผลกราฟ (Cols 9) */}
+        <div className="lg:col-span-9 bg-white p-6 rounded-xl shadow-md">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              การตอบสนองของระบบ (System Response)
+            </h2>
+          </div>
 
-              {z0Entries.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-[#1a2330]">
-                  <div className="text-sm font-medium text-[#7a8fa8] mb-2">Initial conditions (z₀)</div>
-                  <div className="flex flex-wrap gap-2">
-                    {z0Entries.map(({ name, idx, val }) => (
-                      <div key={idx} className="flex items-center gap-1.5 bg-[#0e151e] px-3 py-1 rounded-xl border border-[#1e2836]">
-                        <span className="text-xs text-[#b8ccdf] font-mono">{name}</span>
-                        <input
-                          type="number"
-                          step="any"
-                          value={val}
-                          onChange={(e) => handleZ0Change(idx, parseFloat(e.target.value) || 0)}
-                          className="bg-transparent border-none text-[#e8edf5] text-sm w-16 font-mono outline-none text-right"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-4 mt-4 pt-4 border-t border-[#1a2330]">
-                <div className="flex-1">
-                  <label className="text-xs text-[#7a8fa8] block mb-1">t_end</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={tEnd}
-                    onChange={(e) => setTEnd(parseFloat(e.target.value) || 1)}
-                    className="w-full bg-[#0e151e] border border-[#1e2836] rounded-xl px-3 py-1.5 text-[#e8edf5] text-sm font-mono outline-none"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs text-[#7a8fa8] block mb-1">steps</label>
-                  <input
-                    type="number"
-                    step="50"
-                    min="50"
-                    value={steps}
-                    onChange={(e) => setSteps(Math.max(50, parseInt(e.target.value) || 100))}
-                    className="w-full bg-[#0e151e] border border-[#1e2836] rounded-xl px-3 py-1.5 text-[#e8edf5] text-sm font-mono outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                onClick={runSim}
-                disabled={loading}
-                className="w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-[#1a6bc4] to-[#3b8fd9] text-white font-semibold text-sm flex items-center justify-center gap-2.5 transition hover:shadow-lg hover:shadow-[#1a6bc4]/30 disabled:opacity-50"
+          {chartData.length === 0 && !loading ? (
+            <div className="h-[400px] flex items-center justify-center text-gray-400 border-2 border-dashed border-gray-200 rounded-lg">
+              กรุณากดปุ่ม "Run Simulation" เพื่อดูกราฟ
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={400}>
+              <LineChart
+                data={chartData}
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
               >
-                {loading ? 'Running…' : '▶ Run Simulation (⌘⏎)'}
-              </button>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="time"
+                  label={{
+                    value: "Time (s)",
+                    position: "insideBottomRight",
+                    offset: -10,
+                  }}
+                />
+                <YAxis
+                  label={{
+                    value: "Values",
+                    angle: -90,
+                    position: "insideLeft",
+                  }}
+                />
+                <Tooltip />
+                <Legend verticalAlign="top" height={36} />
 
-              {error && (
-                <div className="mt-3 p-3 bg-[#2a1418] border border-[#5a2830] rounded-xl text-[#ef8a8a] text-sm break-words">
-                  ⚠ {error}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-[#131a24] rounded-2xl border border-[#212b38] p-5 overflow-hidden">
-            <div className="flex items-center justify-between text-sm font-semibold uppercase tracking-wider text-[#7a8fa8] mb-4">
-              <span className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#42e695] inline-block" />
-                Simulation Results
-              </span>
-              {lastRunTime && <span className="text-xs font-normal text-[#4a5a72]">{chartData.length} pts · {lastRunTime}s</span>}
-            </div>
-
-            <div className="bg-[#0e151e] rounded-xl p-2 min-h-[380px] flex items-center justify-center">
-              {chartData.length === 0 ? (
-                <div className="text-center text-[#4a5a72] flex flex-col items-center gap-2">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#3b465a" strokeWidth="1.5">
-                    <path d="M3 17L8 12L12 16L21 7" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M3 21H21" strokeLinecap="round" />
-                  </svg>
-                  <span>Run a simulation to see results</span>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={380}>
-                  <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1a2330" />
-                    <XAxis dataKey="time" stroke="#4a5a72" tick={{ fill: '#6a7f98', fontSize: 11 }} tickLine={false} label={{ value: 'Time (s)', position: 'insideBottom', offset: -6, fill: '#6a7f98', fontSize: 12 }} />
-                    <YAxis stroke="#4a5a72" tick={{ fill: '#6a7f98', fontSize: 11 }} tickLine={false} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ fontSize: '12px', color: '#b0c4de', paddingTop: '8px' }} iconType="circle" />
-                    {stateVars.map((name, idx) => (
-                      <Line key={name} type="monotone" dataKey={name} stroke={colors?.[idx % colors.length] || '#64b5f6'} strokeWidth={2.5} dot={false} isAnimationActive={false} />
-                    ))}
-                    <ReferenceLine y={0} stroke="#2a3648" strokeDasharray="2 4" />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
+                {lineKeys.map((key, index) => (
+                  <Line
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    stroke={colors[index % colors.length]}
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 6 }}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
     </div>
   );
-}
+};
+
+export default SimulinkBuilderPage;

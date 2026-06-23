@@ -176,21 +176,25 @@ def universal_simulate():
             expr = parse_expr(v, local_dict=sym_dict).subs(param_subs)
             inter_funcs[k] = sp.lambdify(inter_args, expr, 'numpy')
 
-        # --- Step 3: Pre-Compile Conditions (Lambdify) ---
+       # --- Step 3: Pre-Compile Conditions (Lambdify) ---
         cond_args = [sym_dict[n] for n in state_vars_names] + [sp.Symbol('t')] + [sym_dict[n] for n in intermediates_data.keys()]
         cond_funcs = {}
         
         for var_name, cond_map in conditions_data.items():
             logic_blocks = []
-            default_val = None
+            default_lambda = None
             for cond_str, val_str in cond_map.items():
+                # Parse and lambdify the return value for ALL branches
+                val_expr = parse_expr(val_str, local_dict=sym_dict).subs(param_subs)
+                val_lambdified = sp.lambdify(cond_args, val_expr, 'numpy')
+                
                 if cond_str.lower() in ['default', 'true', 'else']:
-                    default_val = float(parse_expr(val_str, local_dict=sym_dict).subs(param_subs))
+                    default_lambda = val_lambdified
                 else:
                     cond_lambda = sp.lambdify(cond_args, parse_expr(cond_str, local_dict=sym_dict), 'numpy')
-                    val_lambda = sp.lambdify(cond_args, parse_expr(val_str, local_dict=sym_dict).subs(param_subs), 'numpy')
-                    logic_blocks.append((cond_lambda, val_lambda))
-            cond_funcs[var_name] = (logic_blocks, default_val)
+                    logic_blocks.append((cond_lambda, val_lambdified))
+            
+            cond_funcs[var_name] = (logic_blocks, default_lambda)
 
         # --- Step 4: Solve Algebraic System Simultaneously ---
         def parse_equation(eq_str):
@@ -249,10 +253,11 @@ def universal_simulate():
                 except Exception:
                     inter_vals[k] = 0.0
 
-            # B. Evaluate Conditional States Safely (ABS Loop Logic)
+           # B. Evaluate Conditional States Safely (ABS Loop Logic)
             cond_vals = {}
             args_2 = list(z) + [t_curr] + [inter_vals[n] for n in intermediates_data.keys()]
-            for var_name, (checks, default) in cond_funcs.items():
+            
+            for var_name, (checks, default_lambda) in cond_funcs.items():
                 found = False
                 for cond_lambda, val_lambda in checks:
                     try:
@@ -263,8 +268,14 @@ def universal_simulate():
                             break
                     except Exception:
                         pass
-                if not found and default is not None:
-                    cond_vals[var_name] = default
+                
+                # Evaluate the default lambda if no previous conditions were met
+                if not found and default_lambda is not None:
+                    try:
+                        res = default_lambda(*args_2)
+                        cond_vals[var_name] = float(res.item() if isinstance(res, np.ndarray) else res)
+                    except Exception:
+                        cond_vals[var_name] = 0.0
 
             # C. Evaluate System Accelerations / Derivatives
             eval_args = list(z) + [t_curr] + [inter_vals[n] for n in intermediates_data.keys()] + [cond_vals[n] for n in conditions_data.keys()]

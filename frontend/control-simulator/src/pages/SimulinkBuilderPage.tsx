@@ -41,7 +41,7 @@ export interface ApiResponse {
 
 type ModelType = 
   | "Ball & Beam" 
-  // | "Tank Level (PID)" 
+  | "Tank Level (PID)" 
   | "ABS Braking" 
   | "1-DOF Mass-Spring-Damper" 
   | "2-DOF Mass-Spring-Damper";
@@ -71,22 +71,22 @@ const MODEL_BASES: Record<ModelType, SimulationPayload> = {
     t_end: 5.0,
     steps: 500,
   },
-  // "Tank Level (PID)": {
-  //   state_vars: ["h", "ei"],
-  //   state_derivatives: ["dh_dt", "dei_dt"],
-  //   targets: ["dh_dt", "dei_dt", "q_in"],
-  //   params: { A: 1.0, Cv: 0.5, r: 2.0, Kp: 3.0, Ki: 0.1, Kd: 0.05 },
-  //   intermediates: {},
-  //   conditions: {},
-  //   equations: [
-  //     "dei_dt = (r - h)",
-  //     "q_in = Kp * (r - h) + Ki * ei + Kd * (-dh_dt)",
-  //     "dh_dt = (q_in - Cv * sqrt(h)) / A",
-  //   ],
-  //   z0: [1.0, 0.0],
-  //   t_end: 20.0,
-  //   steps: 500,
-  // },
+  "Tank Level (PID)": {
+    state_vars: ["h", "ei"],
+    state_derivatives: ["dh_dt", "dei_dt"],
+    targets: ["dh_dt", "dei_dt", "q_in"],
+    params: { A: 1.0, Cv: 0.5, r: 2.0, Kp: 3.0, Ki: 0.1, Kd: 0.05 },
+    intermediates: {},
+    conditions: {},
+    equations: [
+      "dei_dt = (r - h)",
+      "q_in = Kp * (r - h) + Ki * ei + Kd * (-dh_dt)",
+      "dh_dt = (q_in - Cv * sqrt(h)) / A",
+    ],
+    z0: [1.0, 0.0],
+    t_end: 20.0,
+    steps: 500,
+  },
   "ABS Braking": {
     state_vars: ["vx", "omega"],
     state_derivatives: ["vx_dot", "omega_dot"],

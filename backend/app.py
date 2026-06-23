@@ -409,6 +409,8 @@ def universal_simulate():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
 if __name__ == '__main__':
     # เปิดโปรเจกต์ที่พอร์ต 3000 (หรือพอร์ตอื่นๆ ตามที่คุณสะดวก)
     app.run(debug=True, port=3000)

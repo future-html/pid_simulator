@@ -214,158 +214,423 @@ const SimulinkBuilderPage: React.FC = () => {
       ? Object.keys(chartData[0]).filter((key) => key !== "time")
       : [];
 
+  // Updated colors: pink, seablue, green, and other vibrant tones
   const colors = [
-    "#8884d8",
-    "#82ca9d",
-    "#ffc658",
-    "#ff7300",
-    "#387908",
-    "#a4de6c",
+    "#ff4d6d", // pink
+    "#00b4d8", // seablue
+    "#06d6a0", // green
+    "#ffb703", // yellow accent
+    "#9b5de5", // purple
+    "#f15bb5", // hot pink
   ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen">
-      <h1 className="text-3xl font-bold text-gray-800 mb-6">
-        ⚙️ Interactive Simulation Lab
-      </h1>
+    <>
+      <style>{`
+        /* ===== Dark Theme with Seablue, Pink & Green ===== */
+        :root {
+          --bg-primary: #0a0f1a;
+          --bg-card: #1a2332;
+          --text-primary: #e2e8f0;
+          --text-secondary: #94a3b8;
+          --accent-pink: #ff4d6d;
+          --accent-seablue: #00b4d8;
+          --accent-green: #06d6a0;
+          --border-color: #2d3a4e;
+          --input-bg: #1e293b;
+          --shadow: 0 10px 25px -5px rgba(0,0,0,0.3);
+        }
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Model Controller & Parameter Workspace Pane */}
-        <div className="lg:col-span-3 bg-white p-6 rounded-xl shadow-md h-fit">
-          <div className="mb-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              เลือกโมเดล:
-            </label>
-            <select
-              value={modelKey}
-              onChange={handleModelChange}
-              className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {Object.keys(MODEL_BASES).map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </div>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
 
-          <div className="mb-4">
-            <h3 className="font-semibold text-gray-700 mb-3 border-b pb-2">
-              ปรับเปลี่ยนค่า Parameters:
-            </h3>
-            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-              {Object.keys(payload.params).map((paramKey) => (
-                <div key={paramKey} className="flex flex-col">
-                  <label className="text-xs text-gray-500 font-medium mb-1">
-                    {paramKey}
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={payload.params[paramKey]}
-                    onChange={(e) =>
-                      handleParamChange(paramKey, e.target.value)
-                    }
-                    className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500 transition-colors"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
+        body {
+          font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+          background-color: var(--bg-primary);
+          color: var(--text-primary);
+        }
 
-          <button
-            onClick={runSimulation}
-            disabled={loading}
-            className={`w-full py-2.5 rounded-lg text-white font-semibold shadow-md transition-all ${
-              loading
-                ? "bg-gray-400 cursor-not-allowed"
-                : "bg-blue-600 hover:bg-blue-700"
-            }`}
-          >
-            {loading ? "⏳ กำลังจำลอง..." : "🚀 Run Simulation"}
-          </button>
-        </div>
+        .app-container {
+          padding: 2rem;
+          max-width: 1400px;
+          margin: 0 auto;
+          min-height: 100vh;
+        }
 
-        {/* Graphical Response Workspace Panel */}
-        <div className="lg:col-span-9 bg-white p-6 rounded-xl shadow-md">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold text-gray-700">
-              การตอบสนองของระบบ (System Response)
-            </h2>
-          </div>
+        /* Gradient header text: pink -> seablue -> green */
+        .gradient-header {
+          font-size: 2.5rem;
+          font-weight: 800;
+          margin-bottom: 2rem;
+          background: linear-gradient(135deg, var(--accent-pink), var(--accent-seablue), var(--accent-green));
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          text-fill-color: transparent;
+          letter-spacing: -0.5px;
+          line-height: 1.2;
+        }
 
-          {/* SymPy Substituted System Output Expression Block */}
-          {equations.length > 0 && (
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-              <div className="text-sm font-semibold text-blue-800 mb-1">
-                🧠 สมการที่ถูกแทนที่ค่าจริง (Substituted by SymPy):
-              </div>
-              <div className="text-xs font-mono text-gray-800 bg-blue-100/50 p-2 rounded border border-blue-100">
-                {equations.map((eq, idx) => (
-                  <div key={idx}>{eq}</div>
-                ))}
-              </div>
-            </div>
-          )}
+        .grid-container {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 1.5rem;
+        }
 
-          {/* Core State Boundary Initialization Metadata */}
-          {Object.keys(initialState).length > 0 && (
-            <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-md">
-              <div className="text-sm font-semibold text-gray-800 mb-1">
-                🎯 ค่าเริ่มต้นของ State (Initial Values):
-              </div>
-              <div className="text-xs font-mono text-gray-800 bg-white p-2 rounded border border-gray-100">
-                {JSON.stringify(initialState, null, 2)}
-              </div>
-            </div>
-          )}
+        @media (min-width: 1024px) {
+          .grid-container {
+            grid-template-columns: 1fr 3fr;
+          }
+        }
 
-          {chartData.length === 0 && !loading ? (
-            <div className="h-[400px] flex items-center justify-center text-gray-400 border-2 border-dashed border-gray-200 rounded-lg">
-              กรุณากดปุ่ม "Run Simulation" เพื่อดูกราฟ
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={400}>
-              <LineChart
-                data={chartData}
-                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+        .card {
+          background: var(--bg-card);
+          border-radius: 1.25rem;
+          padding: 1.5rem;
+          box-shadow: var(--shadow);
+          border: 1px solid var(--border-color);
+          backdrop-filter: blur(10px);
+        }
+
+        .control-panel {
+          height: fit-content;
+        }
+
+        .select-model {
+          margin-bottom: 1.5rem;
+        }
+
+        .select-model label {
+          display: block;
+          font-size: 0.875rem;
+          font-weight: 600;
+          color: var(--text-secondary);
+          margin-bottom: 0.5rem;
+        }
+
+        .model-select {
+          width: 100%;
+          padding: 0.75rem 1rem;
+          border-radius: 0.75rem;
+          border: 1px solid var(--border-color);
+          background: var(--input-bg);
+          color: var(--text-primary);
+          font-weight: 500;
+          outline: none;
+          transition: all 0.2s ease;
+          cursor: pointer;
+          appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-position: right 1rem center;
+        }
+
+        .model-select:focus {
+          border-color: var(--accent-seablue);
+          box-shadow: 0 0 0 3px rgba(0,180,216,0.25);
+        }
+
+        .params-section h3 {
+          font-size: 1rem;
+          font-weight: 700;
+          color: var(--text-primary);
+          margin-bottom: 1rem;
+          padding-bottom: 0.5rem;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .params-list {
+          display: flex;
+          flex-direction: column;
+          gap: 1rem;
+          max-height: 500px;
+          overflow-y: auto;
+          padding-right: 0.5rem;
+        }
+
+        .param-item {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .param-item label {
+          font-size: 0.75rem;
+          color: var(--text-secondary);
+          font-weight: 500;
+          margin-bottom: 0.25rem;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .param-input {
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          border-radius: 0.5rem;
+          border: 1px solid var(--border-color);
+          background: var(--input-bg);
+          color: var(--text-primary);
+          font-size: 0.9rem;
+          transition: border 0.2s, box-shadow 0.2s;
+        }
+
+        .param-input:focus {
+          outline: none;
+          border-color: var(--accent-pink);
+          box-shadow: 0 0 0 3px rgba(255,77,109,0.25);
+        }
+
+        .run-button {
+          width: 100%;
+          padding: 0.75rem 1.5rem;
+          border: none;
+          border-radius: 0.75rem;
+          font-weight: 700;
+          font-size: 1rem;
+          color: #fff;
+          cursor: pointer;
+          margin-top: 1.5rem;
+          background: linear-gradient(135deg, var(--accent-seablue), var(--accent-green));
+          box-shadow: 0 4px 15px rgba(0,180,216,0.3);
+          transition: all 0.3s ease;
+          letter-spacing: 0.5px;
+        }
+
+        .run-button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0,180,216,0.4);
+          background: linear-gradient(135deg, #00c4e8, #2ecc71);
+        }
+
+        .run-button:disabled {
+          background: #334155;
+          color: #94a3b8;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .graph-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1rem;
+        }
+
+        .graph-header h2 {
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: var(--text-primary);
+        }
+
+        .info-box {
+          padding: 1rem;
+          border-radius: 0.75rem;
+          margin-bottom: 1rem;
+          font-size: 0.875rem;
+        }
+
+        .equations-box {
+          background: rgba(0,180,216,0.1);
+          border: 1px solid rgba(0,180,216,0.3);
+        }
+
+        .equations-box .label {
+          color: #7dd3fc;
+          font-weight: 600;
+        }
+
+        .initial-box {
+          background: rgba(6,214,160,0.1);
+          border: 1px solid rgba(6,214,160,0.3);
+        }
+
+        .initial-box .label {
+          color: #86efac;
+          font-weight: 600;
+        }
+
+        .mono-text {
+          font-family: 'Fira Code', 'Cascadia Code', monospace;
+          font-size: 0.8rem;
+          background: rgba(0,0,0,0.2);
+          padding: 0.5rem;
+          border-radius: 0.5rem;
+          margin-top: 0.5rem;
+        }
+
+        .placeholder-chart {
+          height: 400px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #64748b;
+          border: 2px dashed var(--border-color);
+          border-radius: 0.75rem;
+          background: rgba(255,255,255,0.02);
+        }
+
+        /* Recharts customization */
+        .recharts-cartesian-grid-horizontal line,
+        .recharts-cartesian-grid-vertical line {
+          stroke: #2d3a4e;
+        }
+        .recharts-text {
+          fill: var(--text-secondary);
+        }
+        .recharts-default-tooltip {
+          background: var(--bg-card) !important;
+          border: 1px solid var(--border-color) !important;
+          border-radius: 0.5rem !important;
+        }
+        .recharts-tooltip-label {
+          color: var(--text-primary) !important;
+        }
+      `}</style>
+
+      <div className="app-container">
+        <h1 className="gradient-header">
+          ⚙️ Interactive Simulation Lab
+        </h1>
+
+        <div className="grid-container">
+          {/* Model Controller & Parameter Workspace Pane */}
+          <div className="card control-panel">
+            <div className="select-model">
+              <label>เลือกโมเดล:</label>
+              <select
+                value={modelKey}
+                onChange={handleModelChange}
+                className="model-select"
               >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="time"
-                  label={{
-                    value: "Time (s)",
-                    position: "insideBottomRight",
-                    offset: -10,
-                  }}
-                />
-                <YAxis
-                  label={{
-                    value: "Values",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
-                <Tooltip />
-                <Legend verticalAlign="top" height={36} />
-
-                {lineKeys.map((key, index) => (
-                  <Line
-                    key={key}
-                    type="monotone"
-                    dataKey={key}
-                    stroke={colors[index % colors.length]}
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 6 }}
-                  />
+                {Object.keys(MODEL_BASES).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
                 ))}
-              </LineChart>
-            </ResponsiveContainer>
-          )}
+              </select>
+            </div>
+
+            <div className="params-section">
+              <h3>ปรับเปลี่ยนค่า Parameters:</h3>
+              <div className="params-list">
+                {Object.keys(payload.params).map((paramKey) => (
+                  <div key={paramKey} className="param-item">
+                    <label>{paramKey}</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={payload.params[paramKey]}
+                      onChange={(e) =>
+                        handleParamChange(paramKey, e.target.value)
+                      }
+                      className="param-input"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={runSimulation}
+              disabled={loading}
+              className="run-button"
+            >
+              {loading ? "⏳ กำลังจำลอง..." : "🚀 Run Simulation"}
+            </button>
+          </div>
+
+          {/* Graphical Response Workspace Panel */}
+          <div className="card">
+            <div className="graph-header">
+              <h2>การตอบสนองของระบบ (System Response)</h2>
+            </div>
+
+            {/* SymPy Substituted System Output Expression Block */}
+            {equations.length > 0 && (
+              <div className="info-box equations-box">
+                <div className="label">🧠 สมการที่ถูกแทนที่ค่าจริง (Substituted by SymPy):</div>
+                <div className="mono-text">
+                  {equations.map((eq, idx) => (
+                    <div key={idx}>{eq}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Core State Boundary Initialization Metadata */}
+            {Object.keys(initialState).length > 0 && (
+              <div className="info-box initial-box">
+                <div className="label">🎯 ค่าเริ่มต้นของ State (Initial Values):</div>
+                <div className="mono-text">
+                  {JSON.stringify(initialState, null, 2)}
+                </div>
+              </div>
+            )}
+
+            {chartData.length === 0 && !loading ? (
+              <div className="placeholder-chart">
+                กรุณากดปุ่ม "Run Simulation" เพื่อดูกราฟ
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart
+                  data={chartData}
+                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#2d3a4e" />
+                  <XAxis
+                    dataKey="time"
+                    stroke="#94a3b8"
+                    label={{
+                      value: "Time (s)",
+                      position: "insideBottomRight",
+                      offset: -10,
+                      fill: "#94a3b8",
+                    }}
+                  />
+                  <YAxis
+                    stroke="#94a3b8"
+                    label={{
+                      value: "Values",
+                      angle: -90,
+                      position: "insideLeft",
+                      fill: "#94a3b8",
+                    }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#1a2332",
+                      border: "1px solid #2d3a4e",
+                      borderRadius: "0.5rem",
+                      color: "#e2e8f0",
+                    }}
+                  />
+                  <Legend
+                    verticalAlign="top"
+                    height={36}
+                    wrapperStyle={{ color: "#e2e8f0" }}
+                  />
+
+                  {lineKeys.map((key, index) => (
+                    <Line
+                      key={key}
+                      type="monotone"
+                      dataKey={key}
+                      stroke={colors[index % colors.length]}
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 6, strokeWidth: 0 }}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 

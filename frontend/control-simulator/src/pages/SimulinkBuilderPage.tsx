@@ -39,35 +39,63 @@ export interface ApiResponse {
   initial_state: Record<string, number>;
 }
 
-type ModelType = 
-  | "Ball & Beam" 
-  | "Tank Level (PID)" 
-  | "ABS Braking" 
-  | "1-DOF Mass-Spring-Damper" 
+type ModelType =
+  | "Ball & Beam"
+  | "Tank Level (PID)"
+  | "ABS Braking"
+  | "1-DOF Mass-Spring-Damper"
   | "2-DOF Mass-Spring-Damper";
 
 // ==========================================
 // 2. Comprehensive Model Payloads Registry
 // ==========================================
+const MODEL_IMAGES: Record<ModelType, { url: string; caption: string }> = {
+  "Ball & Beam": {
+    url: "https://github.com/user-attachments/assets/1bc90605-195d-4a33-814a-4b37a32258bc",
+    caption: "Ball & Beam system diagram",
+  },
+  "Tank Level (PID)": {
+    url: "https://github.com/user-attachments/assets/bb06f5ef-782d-4919-97d9-95b8006a1414",
+    caption: "Tank level – open loop & MRAC PID tune",
+  },
+  "ABS Braking": {
+    url: "https://github.com/user-attachments/assets/361edde4-0f65-439e-b379-1d04a4869a47",
+    caption: "ABS braking system response",
+  },
+  "1-DOF Mass-Spring-Damper": {
+    url: "", // no image provided
+    caption: "",
+  },
+  "2-DOF Mass-Spring-Damper": {
+    url: "", // no image provided
+    caption: "",
+  },
+};
 
 const MODEL_BASES: Record<ModelType, SimulationPayload> = {
   "Ball & Beam": {
-    state_vars: ["r", "v"],
-    state_derivatives: ["v", "a"],
-    targets: ["a"],
+    state_vars: ["r", "v", "ei"],
+    state_derivatives: ["v", "a", "dei_dt"],
+    targets: ["a", "dei_dt"],
     params: {
-      g: 9.8,
+      g: -9.8,
       m: 0.1,
-      R: 0.05,
-      J: 0.0002,
-      Kp: 10.0,
-      Kd: 2.0,
-      r_target: 0.5,
+      R: 0.04,
+      J: 0.0001,
+      d: 0.04,
+      L: 1,
+      Kp: 30.0,
+      Ki: 2,
+      Kd: 20,
+      r_target: 0.05,
     },
-    intermediates: { theta: "(Kp * (r_target - r) + Kd * (-v))" },
+    intermediates: {},
     conditions: {},
-    equations: ["a = - (m * g / (J / (R**2) + m)) * theta"],
-    z0: [0.0, 0.0],
+    equations: [
+      "dei_dt = (r_target - r)",
+      "a = - (m * g / (J / (R**2) + m)) * (d / L) * (Kp * (r_target - r) + Ki * ei - Kd * v)",
+    ],
+    z0: [0.0, 0.0, 0.0],
     t_end: 5.0,
     steps: 500,
   },
@@ -83,7 +111,7 @@ const MODEL_BASES: Record<ModelType, SimulationPayload> = {
       "q_in = Kp * (r - h) + Ki * ei + Kd * (-dh_dt)",
       "dh_dt = (q_in - Cv * sqrt(h)) / A",
     ],
-    z0: [1.0, 0.0],
+    z0: [0.0, 0.0],
     t_end: 20.0,
     steps: 500,
   },
@@ -156,11 +184,15 @@ const MODEL_BASES: Record<ModelType, SimulationPayload> = {
 const SimulinkBuilderPage: React.FC = () => {
   // State Hook Definitions with Explict Type Guards
   const [modelKey, setModelKey] = useState<ModelType>("Ball & Beam");
-  const [payload, setPayload] = useState<SimulationPayload>(MODEL_BASES["Ball & Beam"]);
+  const [payload, setPayload] = useState<SimulationPayload>(
+    MODEL_BASES["Ball & Beam"],
+  );
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const [equations, setEquations] = useState<string[]>([]);
   const [initialState, setInitialState] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState<boolean>(false);
+
+  const modelImage = MODEL_IMAGES[modelKey];
 
   // Model Selection Dropdown Handler
   const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -194,7 +226,7 @@ const SimulinkBuilderPage: React.FC = () => {
           headers: {
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       setChartData(response.data.data);
@@ -487,12 +519,19 @@ const SimulinkBuilderPage: React.FC = () => {
         .recharts-tooltip-label {
           color: var(--text-primary) !important;
         }
+
+        .model-image-box {
+          background: rgba(255, 183, 3, 0.08);
+          border: 1px solid rgba(255, 183, 3, 0.3);
+        }
+        .model-image-box .label {
+          color: #fbbf24;
+          font-weight: 600;
+        }
       `}</style>
 
       <div className="app-container">
-        <h1 className="gradient-header">
-          ⚙️ Interactive Simulation Lab
-        </h1>
+        <h1 className="gradient-header">⚙️ Interactive Simulation Lab</h1>
 
         <div className="grid-container">
           {/* Model Controller & Parameter Workspace Pane */}
@@ -546,11 +585,12 @@ const SimulinkBuilderPage: React.FC = () => {
             <div className="graph-header">
               <h2>การตอบสนองของระบบ (System Response)</h2>
             </div>
-
             {/* SymPy Substituted System Output Expression Block */}
             {equations.length > 0 && (
               <div className="info-box equations-box">
-                <div className="label">🧠 สมการที่ถูกแทนที่ค่าจริง (Substituted by SymPy):</div>
+                <div className="label">
+                  🧠 สมการที่ถูกแทนที่ค่าจริง (Substituted by SymPy):
+                </div>
                 <div className="mono-text">
                   {equations.map((eq, idx) => (
                     <div key={idx}>{eq}</div>
@@ -558,17 +598,17 @@ const SimulinkBuilderPage: React.FC = () => {
                 </div>
               </div>
             )}
-
             {/* Core State Boundary Initialization Metadata */}
             {Object.keys(initialState).length > 0 && (
               <div className="info-box initial-box">
-                <div className="label">🎯 ค่าเริ่มต้นของ State (Initial Values):</div>
+                <div className="label">
+                  🎯 ค่าเริ่มต้นของ State (Initial Values):
+                </div>
                 <div className="mono-text">
                   {JSON.stringify(initialState, null, 2)}
                 </div>
               </div>
             )}
-
             {chartData.length === 0 && !loading ? (
               <div className="placeholder-chart">
                 กรุณากดปุ่ม "Run Simulation" เพื่อดูกราฟ
@@ -627,6 +667,53 @@ const SimulinkBuilderPage: React.FC = () => {
                 </LineChart>
               </ResponsiveContainer>
             )}
+         
+            {modelImage && (
+              <div className="info-box model-image-box">
+                <div className="label">📷 Reference Diagram:</div>
+                <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
+                  <img
+                    src={modelImage.url}
+                    alt={modelImage.caption || "Reference diagram"}
+                    referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
+                    loading="lazy"
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: "200px",
+                      borderRadius: "0.5rem",
+                      border: "1px solid var(--border-color)",
+                      objectFit: "contain",
+                      backgroundColor: "var(--bg-primary)",
+                    }}
+                    onError={(e) => {
+                      // Fallback to a placeholder SVG if image fails to load
+                      const fallback = `data:image/svg+xml,${encodeURIComponent(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+              <rect width="400" height="200" fill="#1a2332" />
+              <text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="#94a3b8" font-family="sans-serif" font-size="16">
+                ⚠️ Image not available
+              </text>
+            </svg>
+          `)}`;
+                      (e.target as HTMLImageElement).src = fallback;
+                    }}
+                  />
+                  {modelImage.caption && (
+                    <div
+                      style={{
+                        fontSize: "0.8rem",
+                        color: "var(--text-secondary)",
+                        marginTop: "0.25rem",
+                      }}
+                    >
+                      {modelImage.caption}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            ˝
           </div>
         </div>
       </div>

@@ -188,7 +188,7 @@ const SimulinkBuilderPage: React.FC = () => {
     setLoading(true);
     try {
       const response = await axios.post<ApiResponse>(
-        "http://127.0.0.1:3000/api/simulate/universal",
+        "https://pid-simulator-one.vercel.app/api/simulate/universal",
         payload,
         {
           headers: {

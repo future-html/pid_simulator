@@ -21,9 +21,9 @@ app = Flask(__name__)
 CORS(app)
 
 # --- MQTT Configuration ---
-NETPIE_CLIENT_ID = "427e0ae3-fd74-471a-8cc6-3f4dfc7d3641"   
-NETPIE_TOKEN = "W8xAzJNmSQAD3DnMZk9kU4DQAC3hksvs"           
-NETPIE_SECRET = "xq79QfBmDBYQ4ni3fnoXVwjfvfy3k2mg"
+NETPIE_CLIENT_ID = "6826f59b-2946-42d2-9e53-a9a1533b48ae"   
+NETPIE_TOKEN = "GtwtxGhzzthujCjMCmvnBEjKHp5yiJED"           
+NETPIE_SECRET = "Lk3KRid62qhFgJ4smTJKnPtGVTKgA8RZ"
 NETPIE_BROKER = os.getenv("NETPIE_BROKER", "broker.netpie.io")
 
 mqtt_client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)

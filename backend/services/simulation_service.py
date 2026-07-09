@@ -1,61 +1,11 @@
-import os
-import certifi
 import numpy as np
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
-from dotenv import load_dotenv
-from bson.objectid import ObjectId
-import json
-import paho.mqtt.client as mqtt
-from threading import Lock
-import time
 from scipy.integrate import solve_ivp
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
+from typing import List, Dict, Any
 
-load_dotenv()
-
-app = Flask(__name__)
-CORS(app)
-
-# --- MQTT Configuration ---
-NETPIE_CLIENT_ID = "6826f59b-2946-42d2-9e53-a9a1533b48ae"   
-NETPIE_TOKEN = "GtwtxGhzzthujCjMCmvnBEjKHp5yiJED"           
-NETPIE_SECRET = "Lk3KRid62qhFgJ4smTJKnPtGVTKgA8RZ"
-NETPIE_BROKER = os.getenv("NETPIE_BROKER", "broker.netpie.io")
-
-mqtt_client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)
-mqtt_client.username_pw_set(NETPIE_TOKEN, NETPIE_SECRET)
-mqtt_lock = Lock()
-
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        print("✅ Connected to NETPIE MQTT broker")
-    else:
-        print(f"❌ Connection failed with code {rc}")
-mqtt_client.on_connect = on_connect
-
-try:
-    mqtt_client.connect(NETPIE_BROKER, 1883, 60)
-    mqtt_client.loop_start()
-except Exception as e:
-    print(f"❌ MQTT connection error: {e}")
-
-# --- MongoDB Connection ---
-mongo_uri = os.getenv("MONGO_URI")
-client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
-try:
-    client.admin.command('ping')
-    print("✅ Successfully connected to MongoDB!")
-except ConnectionFailure:
-    print("❌ Failed to connect to MongoDB.")
-db = client['sample_mflix']
-users_collection = db['users']
-
-# --- PID Controller Class (修复 2: 补充缺失的 PID 类) ---
 class PIDController:
+    # (copy from original)
     def __init__(self, Kp, Ki, Kd, setpoint):
         self.Kp = Kp
         self.Ki = Ki
@@ -71,78 +21,7 @@ class PIDController:
         self.prev_error = error
         return self.Kp * error + self.Ki * self.integral + self.Kd * derivative
 
-# --- API Routes ---
-
-@app.route('/api/shadow/update', methods=['POST'])
-def update_shadow():
-    sensor_data = request.get_json()
-    if not sensor_data:
-        return jsonify({"error": "No data provided"}), 400
-
-    shadow_payload = {"data": sensor_data}
-    payload_string = json.dumps(shadow_payload)
-    topic = "@shadow/data/update"
-
-    max_retries = 5
-    retry_delay = 1.0
-    attempt = 0
-
-    while attempt < max_retries:
-        attempt += 1
-        if not mqtt_client.is_connected():
-            print(f"⚠️ [Attempt {attempt}/{max_retries}] MQTT client offline. Waiting...")
-            time.sleep(retry_delay)
-            continue
-
-        try:
-            with mqtt_lock:
-                result = mqtt_client.publish(topic, payload_string, qos=1)
-            
-            if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                return jsonify({
-                    "status": "Shadow updated successfully",
-                    "attempts": attempt,
-                    "topic": topic,
-                    "payload_sent": shadow_payload
-                }), 200
-            print(f"⚠️ [Attempt {attempt}/{max_retries}] Publish failed with code {result.rc}")
-        except Exception as e:
-            print(f"❌ [Attempt {attempt}/{max_retries}] Error: {e}")
-        time.sleep(retry_delay)
-
-    return jsonify({"error": f"Failed to update shadow after {max_retries} attempts."}), 503
-
-
-@app.route('/users', methods=['GET'])
-def get_users():
-    try:
-        users = []
-        for user in users_collection.find():
-            users.append({
-                "id": str(user['_id']), 
-                "name": user.get('name', 'No Name Provided'), 
-                "email": user.get('email', 'No Email Provided')
-            })
-        return jsonify(users), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/users', methods=['POST'])
-def create_user():
-    data = request.get_json()
-    if not data or 'name' not in data or 'email' not in data:
-        return jsonify({"error": "Missing name or email"}), 400
-    new_user = {"name": data['name'], "email": data['email']}
-    try:
-        result = users_collection.insert_one(new_user)
-        return jsonify({"message": "User created successfully", "id": str(result.inserted_id)}), 201
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/simulate/universal', methods=['POST'])
-def universal_simulate():
+def universal_simulate(data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         data = request.get_json() or {}
         return_pipeline = data.get('return_pipeline', False)
@@ -330,6 +209,3 @@ def universal_simulate():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, port=3000)

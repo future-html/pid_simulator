@@ -7,3 +7,7 @@ control
 paho-mqtt
 scipy
 sympy
+fastapi
+numpy
+line-bot-sdk
+uvicorn

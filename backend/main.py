@@ -28,7 +28,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Environment detection
 IS_VERCEL = os.getenv("VERCEL", "0") == "1"
-USE_MQTT = os.getenv("USE_MQTT", "0") == "1"   # จะเป็น boolean True/False
+USE_MQTT = True   # จะเป็น boolean True/False
 
 # ================== MQTT Client (only if USE_MQTT = True) ==================
 mqtt_client = None
@@ -61,23 +61,31 @@ def publish_shadow(data: dict) -> bool:
         return _publish_shadow_rest(data)
 
 def _publish_shadow_mqtt(data: dict) -> bool:
-    client = mqtt_client
-    if client is None or not client.is_connected():
-        # สร้าง temp client (ใช้ใน Vercel)
-        client = get_mqtt_client()
-        client.connect(NETPIE_BROKER, 1883, 60)
-        client.loop_start()
-         # รอไม่เกิน 2 วินาที
-        timeout = 2
-        start = time.time()
-        while not conn_ok and (time.time() - start) < timeout:
-            time.sleep(0.1)
-        if not conn_ok:
-            client.loop_stop()
-            return False
-        # publish
-    else:
-        temp_client = False
+    # สร้าง client ใหม่ (temp) หรือใช้ persistent ถ้ามี
+    client = get_mqtt_client()
+    if client is None:
+        return False
+
+    conn_ok = False
+    def on_connect(client, userdata, flags, rc):
+        nonlocal conn_ok
+        conn_ok = (rc == 0)
+
+    client.on_connect = on_connect
+    client.connect(NETPIE_BROKER, 1883, 60)
+    client.loop_start()
+
+    # รอให้เชื่อมต่อสำเร็จ (ไม่เกิน 3 วินาที)
+    timeout = 3
+    start = time.time()
+    while not conn_ok and (time.time() - start) < timeout:
+        time.sleep(0.1)
+
+    if not conn_ok:
+        client.loop_stop()
+        client.disconnect()
+        print("MQTT connection failed")
+        return False
 
     topic = "@shadow/data/update"
     payload = json.dumps({"data": data})
@@ -87,15 +95,15 @@ def _publish_shadow_mqtt(data: dict) -> bool:
         if ok:
             print(f"Shadow MQTT published: {data}")
         else:
-            print(f"Shadow MQTT failed: {result.rc}")
+            print(f"Shadow MQTT publish failed: {result.rc}")
     except Exception as e:
         ok = False
         print(f"MQTT exception: {e}")
 
-    if temp_client:
-        client.loop_stop()
-        client.disconnect()
+    client.loop_stop()
+    client.disconnect()
     return ok
+
 
 def _publish_shadow_rest(data: dict) -> bool:
     url = "https://api.netpie.io/v2/device/shadow/data"

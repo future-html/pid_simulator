@@ -103,11 +103,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.on_event("startup")
 async def startup():
     # MQTT
-    try:
-        mqtt_client.connect(NETPIE_BROKER, 1883, 60)
-        mqtt_client.loop_start()
-    except Exception as e:
-        print(f"MQTT connection error: {e}")
+    # try:
+    #     mqtt_client.connect(NETPIE_BROKER, 1883, 60)
+    #     mqtt_client.loop_start()
+    # except Exception as e:
+    #     print(f"MQTT connection error: {e}")
     # MongoDB
     test_mongo_connection()
 

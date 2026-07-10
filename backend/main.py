@@ -91,13 +91,21 @@ def _publish_shadow_mqtt(data: dict) -> bool:
     return ok
 
 def _publish_shadow_rest(data: dict) -> bool:
-    url = "https://api.netpie.io/v2/device/shadow/data"
+    url = "https://api.netpie.io/v2/device/message"
     headers = {
-        "Authorization": f"Bearer {NETPIE_TOKEN}",
+        "Authorization": f"Device {NETPIE_CLIENT_ID}:{NETPIE_TOKEN}",
         "Content-Type": "application/json"
     }
+    payload = {"data": data}
     try:
-        resp = requests.put(url, headers=headers, json={"data": data}, timeout=10)
+        resp = requests.put(
+            url,
+            params={"topic": "@shadow/data/update"},
+            json=payload,
+            headers=headers,
+            timeout=10
+        )
+        print(f"REST status: {resp.status_code}, body: {resp.text}")
         if resp.status_code == 200:
             print(f"Shadow REST published: {data}")
             return True

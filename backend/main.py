@@ -98,7 +98,7 @@ def _publish_shadow_rest(data: dict) -> bool:
     }
     payload = {"data": data}
     try:
-        resp = requests.put(
+        resp = requests.post(
             url,
             params={"topic": "@shadow/data/update"},
             json=payload,

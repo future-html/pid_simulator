@@ -28,7 +28,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Environment detection
 IS_VERCEL = os.getenv("VERCEL", "0") == "1"
-USE_MQTT = os.getenv("USE_MQTT", "1" if not IS_VERCEL else "0") == "1"
+USE_MQTT = "1"
 
 # ================== MQTT Client (only if USE_MQTT = True) ==================
 mqtt_client = None

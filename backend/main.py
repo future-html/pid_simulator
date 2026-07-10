@@ -1,57 +1,111 @@
 import os
 import json
+import time
+import requests
 from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-import paho.mqtt.client as mqtt
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import TextSendMessage, MessageEvent, TextMessage
 from linebot.exceptions import InvalidSignatureError
 from dotenv import load_dotenv
 import certifi
+import paho.mqtt.client as mqtt
+
 load_dotenv()
 
 # ================== Configuration ==================
-# NETPIE MQTT
 NETPIE_CLIENT_ID = os.getenv("NETPIE_CLIENT_ID", "")
 NETPIE_TOKEN = os.getenv("NETPIE_TOKEN", "")
 NETPIE_SECRET = os.getenv("NETPIE_SECRET", "")
 NETPIE_BROKER = os.getenv("NETPIE_BROKER", "broker.netpie.io")
 
-# LINE
 LINE_CHANNEL_TOKEN = os.getenv("LINE_CHANNEL_TOKEN", "")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 LINE_USER_ID = os.getenv("LINE_USER_ID", "")
 
-# MongoDB
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
-# ================== MQTT Setup ==================
-mqtt_client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)
-mqtt_client.username_pw_set(NETPIE_TOKEN, NETPIE_SECRET)
+# Environment detection
+IS_VERCEL = os.getenv("VERCEL", "0") == "1"
+USE_MQTT = os.getenv("USE_MQTT", "1" if not IS_VERCEL else "0") == "1"
 
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        print("✅ Connected to NETPIE MQTT broker")
+# ================== MQTT Client (only if USE_MQTT = True) ==================
+mqtt_client = None
+
+def get_mqtt_client():
+    """สร้าง MQTT client ใหม่ทุกครั้ง (Vercel) หรือใช้ persistent (Local)"""
+    if USE_MQTT:
+        client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)
+        client.username_pw_set(NETPIE_TOKEN, NETPIE_SECRET)
+        return client
+    return None
+
+if USE_MQTT:
+    # Local persistent connection
+    if not IS_VERCEL:
+        mqtt_client = get_mqtt_client()
+        mqtt_client.connect(NETPIE_BROKER, 1883, 60)
+        mqtt_client.loop_start()
+        print("✅ MQTT persistent connection started")
     else:
-        print(f"❌ MQTT connection failed with code {rc}")
+        # Vercel: we create temporary clients
+        print("ℹ️ MQTT mode enabled (temporary connections)")
 
-mqtt_client.on_connect = on_connect
+# ================== Shadow Publish (MQTT or REST) ==================
+def publish_shadow(data: dict) -> bool:
+    """Publish ไปยัง Shadow โดยเลือกใช้ MQTT หรือ REST ตามสภาพแวดล้อม"""
+    if USE_MQTT:
+        return _publish_shadow_mqtt(data)
+    else:
+        return _publish_shadow_rest(data)
 
-def publish_shadow(data: dict):
-    """ส่งข้อมูลไปยัง Shadow ของ NETPIE (topic @shadow/data/update)"""
+def _publish_shadow_mqtt(data: dict) -> bool:
+    client = mqtt_client
+    if client is None or not client.is_connected():
+        # สร้าง temp client (ใช้ใน Vercel)
+        client = get_mqtt_client()
+        client.connect(NETPIE_BROKER, 1883, 60)
+        client.loop_start()
+        time.sleep(0.5)  # ให้ connection settle
+        temp_client = True
+    else:
+        temp_client = False
+
     topic = "@shadow/data/update"
     payload = json.dumps({"data": data})
-    if mqtt_client.is_connected():
-        result = mqtt_client.publish(topic, payload, qos=1)
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            print(f"Shadow published: {data}")
+    try:
+        result = client.publish(topic, payload, qos=1)
+        ok = result.rc == mqtt.MQTT_ERR_SUCCESS
+        if ok:
+            print(f"Shadow MQTT published: {data}")
+        else:
+            print(f"Shadow MQTT failed: {result.rc}")
+    except Exception as e:
+        ok = False
+        print(f"MQTT exception: {e}")
+
+    if temp_client:
+        client.loop_stop()
+        client.disconnect()
+    return ok
+
+def _publish_shadow_rest(data: dict) -> bool:
+    url = "https://api.netpie.io/v2/device/shadow/data"
+    headers = {
+        "Authorization": f"Bearer {NETPIE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    try:
+        resp = requests.put(url, headers=headers, json={"data": data}, timeout=10)
+        if resp.status_code == 200:
+            print(f"Shadow REST published: {data}")
             return True
         else:
-            print(f"Shadow publish failed: {result.rc}")
+            print(f"Shadow REST failed: {resp.status_code} {resp.text}")
             return False
-    else:
-        print("MQTT not connected")
+    except Exception as e:
+        print(f"Shadow REST exception: {e}")
         return False
 
 # ================== LINE Setup ==================
@@ -70,7 +124,6 @@ if LINE_CHANNEL_TOKEN:
         line_bot_api = None
 
 def push_line_message(text: str, user_id: str = None):
-    """ส่ง Push Message ไปยัง LINE user (default ใช้ LINE_USER_ID จาก .env)"""
     uid = user_id or LINE_USER_ID
     if not uid or not line_bot_api:
         return False
@@ -82,8 +135,8 @@ def push_line_message(text: str, user_id: str = None):
         print(f"LINE push error: {e}")
         return False
 
-# ================== MongoDB Setup ==================
-mongo_client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+# ================== MongoDB ==================
+mongo_client = MongoClient(MONGO_URI, tlsCAFile=certifi.where() if "mongodb+srv" in MONGO_URI else None)
 mongo_db = mongo_client["plc_db"]
 mongo_collection = mongo_db["test_data"]
 
@@ -96,41 +149,65 @@ def test_mongo_connection():
         print(f"❌ MongoDB connection error: {e}")
         return False
 
-# ================== FastAPI App ==================
-app = FastAPI(title="IoT Starter", version="2.0.0")
+# ================== Command Processor ==================
+def process_command(text: str, user_id: str = "unknown") -> str:
+    trimmed = text.strip()
+    print(f"📩 Command from {user_id}: '{trimmed}'")
+
+    if trimmed.startswith("shadow "):
+        json_str = trimmed[len("shadow "):].strip()
+        try:
+            data = json.loads(json_str)
+            ok = publish_shadow(data)
+            if ok:
+                return f"✅ Shadow updated with: {json.dumps(data)}"
+            else:
+                return "❌ Shadow update failed"
+        except json.JSONDecodeError:
+            return "❌ JSON format invalid. Usage: shadow {\"temp\":30}"
+
+    elif trimmed == "mongo":
+        docs = list(mongo_collection.find().sort("_id", -1).limit(1))
+        if docs:
+            doc = docs[0]
+            doc["_id"] = str(doc["_id"])
+            return f"📄 Latest data: {json.dumps(doc, default=str)}"
+        return "📭 No data in MongoDB"
+
+    elif trimmed == "help":
+        return (
+            "Commands:\n"
+            "shadow {json} - update shadow\n"
+            "mongo - latest data\n"
+            "help - this message"
+        )
+    else:
+        return f"Unknown command: '{trimmed}'. Type 'help' for list."
+
+# ================== FastAPI ==================
+app = FastAPI(title="IoT Starter", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("startup")
 async def startup():
-    # MQTT
-    # try:
-    #     mqtt_client.connect(NETPIE_BROKER, 1883, 60)
-    #     mqtt_client.loop_start()
-    # except Exception as e:
-    #     print(f"MQTT connection error: {e}")
-    # MongoDB
     test_mongo_connection()
 
-# ================== Routes ==================
 @app.get("/")
 def root():
     return {"message": "IoT Gateway running"}
 
-# 1) ส่ง LINE Push Message (POST + JSON body)
 @app.post("/test/line")
 async def test_line(body: dict = Body(...)):
     message = body.get("message", "Hello")
-    user_id = body.get("user_id", None)  # ถ้าไม่ระบุจะใช้ค่าเริ่มต้นจาก .env
+    user_id = body.get("user_id")
     ok = push_line_message(message, user_id)
     return {"sent": ok}
 
-# 2) ส่งข้อมูลขึ้น Shadow (ไม่ใช้ @msg)
 @app.post("/test/shadow")
 async def test_shadow(body: dict = Body(...)):
     ok = publish_shadow(body)
     return {"published": ok}
 
-# 3) MongoDB
 @app.post("/test/mongo")
 async def test_mongo_insert(data: dict = Body(...)):
     result = mongo_collection.insert_one(data)
@@ -143,7 +220,7 @@ async def test_mongo_find():
         doc["_id"] = str(doc["_id"])
     return {"count": len(docs), "data": docs}
 
-# 4) LINE Webhook (สำหรับรับคำสั่งจากผู้ใช้)
+# ================== LINE Webhook ==================
 @app.post("/line/callback")
 async def line_callback(request: Request):
     if not handler:
@@ -156,77 +233,31 @@ async def line_callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return "OK"
 
-# LINE message handler (trim + command dispatch)
 if handler:
     @handler.add(MessageEvent, message=TextMessage)
     def handle_message(event):
-        raw_text = event.message.text
         user_id = event.source.user_id
-        reply_token = event.reply_token
+        text = event.message.text
+        reply = process_command(text, user_id)
 
-        # ตัดช่องว่างหัวท้าย และแยกคำสั่งกับอาร์กิวเมนต์
-        trimmed = raw_text.strip()
-        print(f"📩 Command from {user_id}: '{trimmed}'")
-
-        # ---- คำสั่งต่าง ๆ ----
-        if trimmed.startswith("shadow "):
-            # รูปแบบ: shadow {"temp":30}
-            json_str = trimmed[len("shadow "):].strip()
-            try:
-                data = json.loads(json_str)
-                ok = publish_shadow(data)
-                reply = "✅ Shadow published" if ok else "❌ Shadow publish failed"
-            except Exception as e:
-                reply = f"❌ JSON parse error: {str(e)}"
-
-        elif trimmed == "mongo":
-            # ดึงข้อมูลล่าสุด 1 รายการจาก MongoDB
-            docs = list(mongo_collection.find().sort("_id", -1).limit(1))
-            if docs:
-                doc = docs[0]
-                doc["_id"] = str(doc["_id"])
-                reply = f"📄 Latest data: {json.dumps(doc, default=str)}"
-            else:
-                reply = "📭 No data in MongoDB"
-
-        elif trimmed == "help":
-            reply = (
-                "คำสั่ง:\n"
-                "shadow {json} - publish shadow\n"
-                "mongo - latest data\n"
-                "help - this message"
+        try:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply)
             )
+            print(f"Replied: {reply}")
+        except Exception as e:
+            print(f"Reply error: {e}")
 
-        else:
-            # ถ้าไม่ตรงคำสั่งไหนเลย → echo กลับ (หรือจะบอกว่า unknown)
-            reply = f"คุณพิมพ์ว่า: {trimmed} (use 'help' for commands)"
+        if LINE_USER_ID and LINE_USER_ID != user_id:
+            push_line_message(f"🛠️ {reply}")
 
-        # ตอบกลับผู้ใช้
-        if line_bot_api and reply_token:
-            try:
-                line_bot_api.reply_message(
-                    reply_token,
-                    TextSendMessage(text=reply)
-                )
-                print(f"Replied: {reply}")
-            except Exception as e:
-                print(f"Reply error: {e}")
-
-        # (Optional) Push ข้อความไปยัง LINE_USER_ID เพื่อ debug
-        if line_bot_api and LINE_USER_ID:
-            try:
-                line_bot_api.push_message(LINE_USER_ID, TextSendMessage(text=f"🛠️ {reply}"))
-            except:
-                pass
-            
-            
 @app.post("/dev/line")
 async def dev_line(body: dict = Body(...)):
     events = body.get("events", [])
     for event in events:
         if event.get("type") == "message" and event.get("message", {}).get("type") == "text":
-            user_id = event["source"].get("userId", "unknown")
             text = event["message"]["text"]
-            reply_text = process_command(text, user_id)
-            push_line(reply_text)   # (อาจจะปรับเป็น push_line(reply_text) เพื่อใช้ LINE_USER_ID จริง)
+            reply_text = process_command(text, "dev-user")
+            push_line_message(reply_text)
     return {"status": "processed"}

@@ -162,13 +162,15 @@ def test_mongo_connection():
 def process_command(text: str, user_id: str = "unknown") -> str:
     trimmed = text.strip()
     print(f"📩 Command from {user_id}: '{trimmed}'")
-
     if trimmed.startswith("shadow "):
         json_str = trimmed[len("shadow "):].strip()
+        json_str = " ".join(json_str.split())          # clean newlines/spaces
         try:
             data = json.loads(json_str)
             ok = publish_shadow(data)
             if ok:
+                # send LINE Notify (optional)
+                send_line_notify(f"Shadow updated: {json.dumps(data)}")
                 return f"✅ Shadow updated with: {json.dumps(data)}"
             else:
                 return "❌ Shadow update failed"
@@ -193,9 +195,32 @@ def process_command(text: str, user_id: str = "unknown") -> str:
     else:
         return f"Unknown command: '{trimmed}'. Type 'help' for list."
 
+def send_line_notify(message: str) -> bool:
+    """ส่งข้อความผ่าน LINE Notify"""
+    if not LINE_NOTIFY_TOKEN:
+        print("LINE Notify token not configured")
+        return False
+    url = "https://notify-api.line.me/api/notify"
+    headers = {
+        "Authorization": f"Bearer {LINE_NOTIFY_TOKEN}"
+    }
+    data = {"message": message}
+    try:
+        resp = requests.post(url, headers=headers, data=data, timeout=10)
+        if resp.status_code == 200:
+            print(f"LINE Notify sent: {message}")
+            return True
+        else:
+            print(f"LINE Notify failed: {resp.status_code} {resp.text}")
+            return False
+    except Exception as e:
+        print(f"LINE Notify exception: {e}")
+        return False
+    
 # ================== FastAPI ==================
 app = FastAPI(title="IoT Starter", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
 
 @app.on_event("startup")
 async def startup():

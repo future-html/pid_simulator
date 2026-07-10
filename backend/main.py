@@ -96,18 +96,19 @@ def _publish_shadow_rest(data: dict) -> bool:
         "Authorization": f"Device {NETPIE_CLIENT_ID}:{NETPIE_TOKEN}",
         "Content-Type": "application/json"
     }
-    payload = {"data": data}
+    # payload ส่งเป็น JSON string เหมือน MQTT
+    payload_str = json.dumps(data)
     try:
         resp = requests.post(
             url,
             params={"topic": "@shadow/data/update"},
-            json=payload,
+            data=payload_str,                # ใช้ data= เพื่อส่งเป็น plain text JSON
             headers=headers,
             timeout=10
         )
         print(f"REST status: {resp.status_code}, body: {resp.text}")
         if resp.status_code == 200:
-            print(f"Shadow REST published: {data}")
+            print(f"Shadow REST published via message: {data}")
             return True
         else:
             print(f"Shadow REST failed: {resp.status_code} {resp.text}")

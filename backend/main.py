@@ -11,6 +11,9 @@ from linebot.exceptions import InvalidSignatureError
 from dotenv import load_dotenv
 import certifi
 import paho.mqtt.client as mqtt
+from linebot.models import FlexSendMessage
+from datetime import datetime
+
 
 load_dotenv()
 
@@ -32,6 +35,67 @@ USE_MQTT = True   # จะเป็น boolean True/False
 
 # ================== MQTT Client (only if USE_MQTT = True) ==================
 mqtt_client = None
+
+
+PROJECT_NAME = "MotorControl"   # กำหนดชื่อโปรเจกต์
+MOTOR_VAR = "motor_run"
+
+def build_motor_flex(status: bool) -> dict:
+    return {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "🚀 Motor Status",
+                    "weight": "bold",
+                    "size": "xl",
+                    "color": "#ffffff"
+                }
+            ],
+            "backgroundColor": "#27ACB2" if status else "#8C8C8C"
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": "สถานะมอเตอร์", "weight": "bold", "size": "md", "color": "#555555"},
+                {
+                    "type": "text",
+                    "text": "ON" if status else "OFF",
+                    "size": "3xl",
+                    "weight": "bold",
+                    "color": "#27ACB2" if status else "#8C8C8C"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": f"เวลา: {datetime.utcnow().strftime('%H:%M:%S')}",
+                    "size": "xs",
+                    "color": "#aaaaaa"
+                }
+            ]
+        }
+    }
+
+def push_flex_message(alt_text: str, flex_dict: dict, user_id: str = None):
+    uid = user_id or LINE_USER_ID
+    if not uid or not line_bot_api:
+        return False
+    try:
+        line_bot_api.push_message(uid, FlexSendMessage(alt_text=alt_text, contents=flex_dict))
+        print(f"Flex pushed to {uid}")
+        return True
+    except Exception as e:
+        print(f"Flex push error: {e}")
+        return False
 
 def get_mqtt_client():
     """สร้าง MQTT client ใหม่ทุกครั้ง (Vercel) หรือใช้ persistent (Local)"""
@@ -170,20 +234,60 @@ def test_mongo_connection():
 def process_command(text: str, user_id: str = "unknown") -> str:
     trimmed = text.strip()
     print(f"📩 Command from {user_id}: '{trimmed}'")
+
     if trimmed.startswith("shadow "):
         json_str = trimmed[len("shadow "):].strip()
-        json_str = " ".join(json_str.split())   # clean whitespace/newlines
+        json_str = " ".join(json_str.split())
         try:
             data = json.loads(json_str)
             ok = publish_shadow(data)
             if ok:
-                # Send push notification via LINE Messaging API (bot)
                 push_line_message(f"📣 Shadow updated: {json.dumps(data)}")
                 return f"✅ Shadow updated with: {json.dumps(data)}"
             else:
                 return "❌ Shadow update failed"
         except json.JSONDecodeError:
             return "❌ JSON format invalid. Usage: shadow {\"temp\":30}"
+
+    elif trimmed == "start":
+        data = {MOTOR_VAR: True}
+        ok = publish_shadow(data)
+        if ok:
+            # บันทึกลง MongoDB
+            mongo_collection.insert_one({
+                "timestamp": datetime.utcnow(),
+                "command": "start",
+                "user": user_id,
+                "project": PROJECT_NAME,
+                "variable": MOTOR_VAR,
+                "value": True
+            })
+            # ส่ง Flex Message สถานะ ON
+            flex = build_motor_flex(True)
+            push_flex_message("Motor ON", flex)
+            push_line_message(f"▶️ มอเตอร์เริ่มทำงาน (Project: {PROJECT_NAME})")
+            return "✅ มอเตอร์เริ่มทำงาน"
+        else:
+            return "❌ ไม่สามารถเริ่มมอเตอร์ได้"
+
+    elif trimmed == "stop":
+        data = {MOTOR_VAR: False}
+        ok = publish_shadow(data)
+        if ok:
+            mongo_collection.insert_one({
+                "timestamp": datetime.utcnow(),
+                "command": "stop",
+                "user": user_id,
+                "project": PROJECT_NAME,
+                "variable": MOTOR_VAR,
+                "value": False
+            })
+            flex = build_motor_flex(False)
+            push_flex_message("Motor OFF", flex)
+            push_line_message(f"⏹️ มอเตอร์หยุดทำงาน (Project: {PROJECT_NAME})")
+            return "✅ มอเตอร์หยุดทำงาน"
+        else:
+            return "❌ ไม่สามารถหยุดมอเตอร์ได้"
 
     elif trimmed == "mongo":
         docs = list(mongo_collection.find().sort("_id", -1).limit(1))
@@ -197,6 +301,8 @@ def process_command(text: str, user_id: str = "unknown") -> str:
         return (
             "Commands:\n"
             "shadow {json} - update shadow\n"
+            "start - turn motor ON\n"
+            "stop - turn motor OFF\n"
             "mongo - latest data\n"
             "help - this message"
         )
@@ -303,3 +409,23 @@ async def dev_line(body: dict = Body(...)):
             reply_text = process_command(text, "dev-user")
             push_line_message(reply_text)
     return {"status": "processed"}
+
+@app.post("/auto-status")
+async def auto_status():
+    # อ่านสถานะปัจจุบันจาก Shadow (ผ่าน REST) หรือใช้ตัวแปร global
+    # ตัวอย่างนี้สมมติว่าเรารู้ว่า motor_run ล่าสุดคืออะไร (อาจต้อง query Shadow)
+    # แต่เพื่อความง่าย เราจะสุ่มสถานะเพื่อทดสอบ
+    import random
+    status = random.choice([True, False])
+    flex = build_motor_flex(status)
+    push_flex_message("Motor Status Update", flex)
+    # บันทึกใน MongoDB
+    # mongo_collection.insert_one({
+    #     "timestamp": datetime.utcnow(),
+    #     "command": "auto",
+    #     "user": "system",
+    #     "project": PROJECT_NAME,
+    #     "variable": MOTOR_VAR,
+    #     "value": status
+    # })
+    return {"sent": True, "status": status}

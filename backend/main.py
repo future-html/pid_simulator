@@ -156,16 +156,77 @@ async def line_callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
     return "OK"
 
-# LINE message handler (เมื่อมีข้อความเข้า)
+# LINE message handler (trim + command dispatch)
 if handler:
     @handler.add(MessageEvent, message=TextMessage)
     def handle_message(event):
-        text = event.message.text
+        raw_text = event.message.text
         user_id = event.source.user_id
-        print(f"📩 Received from {user_id}: {text}")
-        # ตอบกลับอัตโนมัติ (สามารถเพิ่ม logic ทีหลัง)
-        if line_bot_api:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"คุณพิมพ์ว่า: {text}")
+        reply_token = event.reply_token
+
+        # ตัดช่องว่างหัวท้าย และแยกคำสั่งกับอาร์กิวเมนต์
+        trimmed = raw_text.strip()
+        print(f"📩 Command from {user_id}: '{trimmed}'")
+
+        # ---- คำสั่งต่าง ๆ ----
+        if trimmed.startswith("shadow "):
+            # รูปแบบ: shadow {"temp":30}
+            json_str = trimmed[len("shadow "):].strip()
+            try:
+                data = json.loads(json_str)
+                ok = publish_shadow(data)
+                reply = "✅ Shadow published" if ok else "❌ Shadow publish failed"
+            except Exception as e:
+                reply = f"❌ JSON parse error: {str(e)}"
+
+        elif trimmed == "mongo":
+            # ดึงข้อมูลล่าสุด 1 รายการจาก MongoDB
+            docs = list(mongo_collection.find().sort("_id", -1).limit(1))
+            if docs:
+                doc = docs[0]
+                doc["_id"] = str(doc["_id"])
+                reply = f"📄 Latest data: {json.dumps(doc, default=str)}"
+            else:
+                reply = "📭 No data in MongoDB"
+
+        elif trimmed == "help":
+            reply = (
+                "คำสั่ง:\n"
+                "shadow {json} - publish shadow\n"
+                "mongo - latest data\n"
+                "help - this message"
             )
+
+        else:
+            # ถ้าไม่ตรงคำสั่งไหนเลย → echo กลับ (หรือจะบอกว่า unknown)
+            reply = f"คุณพิมพ์ว่า: {trimmed} (use 'help' for commands)"
+
+        # ตอบกลับผู้ใช้
+        if line_bot_api and reply_token:
+            try:
+                line_bot_api.reply_message(
+                    reply_token,
+                    TextSendMessage(text=reply)
+                )
+                print(f"Replied: {reply}")
+            except Exception as e:
+                print(f"Reply error: {e}")
+
+        # (Optional) Push ข้อความไปยัง LINE_USER_ID เพื่อ debug
+        if line_bot_api and LINE_USER_ID:
+            try:
+                line_bot_api.push_message(LINE_USER_ID, TextSendMessage(text=f"🛠️ {reply}"))
+            except:
+                pass
+            
+            
+@app.post("/dev/line")
+async def dev_line(body: dict = Body(...)):
+    events = body.get("events", [])
+    for event in events:
+        if event.get("type") == "message" and event.get("message", {}).get("type") == "text":
+            user_id = event["source"].get("userId", "unknown")
+            text = event["message"]["text"]
+            reply_text = process_command(text, user_id)
+            push_line(reply_text)   # (อาจจะปรับเป็น push_line(reply_text) เพื่อใช้ LINE_USER_ID จริง)
+    return {"status": "processed"}

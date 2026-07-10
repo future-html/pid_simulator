@@ -28,7 +28,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Environment detection
 IS_VERCEL = os.getenv("VERCEL", "0") == "1"
-USE_MQTT = "1"
+USE_MQTT = os.getenv("USE_MQTT", "0") == "1"   # จะเป็น boolean True/False
 
 # ================== MQTT Client (only if USE_MQTT = True) ==================
 mqtt_client = None
@@ -98,24 +98,17 @@ def _publish_shadow_mqtt(data: dict) -> bool:
     return ok
 
 def _publish_shadow_rest(data: dict) -> bool:
-    url = "https://api.netpie.io/v2/device/message"
+    url = "https://api.netpie.io/v2/device/shadow/data"
     headers = {
         "Authorization": f"Device {NETPIE_CLIENT_ID}:{NETPIE_TOKEN}",
         "Content-Type": "application/json"
     }
-    # payload ส่งเป็น JSON string เหมือน MQTT
-    payload_str = json.dumps(data)
+    payload = {"data": data}
     try:
-        resp = requests.post(
-            url,
-            params={"topic": "@shadow/data/update"},
-            data=payload_str,                # ใช้ data= เพื่อส่งเป็น plain text JSON
-            headers=headers,
-            timeout=10
-        )
+        resp = requests.put(url, json=payload, headers=headers, timeout=10)
         print(f"REST status: {resp.status_code}, body: {resp.text}")
         if resp.status_code == 200:
-            print(f"Shadow REST published via message: {data}")
+            print(f"Shadow REST published: {data}")
             return True
         else:
             print(f"Shadow REST failed: {resp.status_code} {resp.text}")

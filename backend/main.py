@@ -67,8 +67,15 @@ def _publish_shadow_mqtt(data: dict) -> bool:
         client = get_mqtt_client()
         client.connect(NETPIE_BROKER, 1883, 60)
         client.loop_start()
-        time.sleep(0.5)  # ให้ connection settle
-        temp_client = True
+         # รอไม่เกิน 2 วินาที
+        timeout = 2
+        start = time.time()
+        while not conn_ok and (time.time() - start) < timeout:
+            time.sleep(0.1)
+        if not conn_ok:
+            client.loop_stop()
+            return False
+        # publish
     else:
         temp_client = False
 
@@ -164,13 +171,13 @@ def process_command(text: str, user_id: str = "unknown") -> str:
     print(f"📩 Command from {user_id}: '{trimmed}'")
     if trimmed.startswith("shadow "):
         json_str = trimmed[len("shadow "):].strip()
-        json_str = " ".join(json_str.split())          # clean newlines/spaces
+        json_str = " ".join(json_str.split())   # clean whitespace/newlines
         try:
             data = json.loads(json_str)
             ok = publish_shadow(data)
             if ok:
-                # send LINE Notify (optional)
-                send_line_notify(f"Shadow updated: {json.dumps(data)}")
+                # Send push notification via LINE Messaging API (bot)
+                push_line_message(f"📣 Shadow updated: {json.dumps(data)}")
                 return f"✅ Shadow updated with: {json.dumps(data)}"
             else:
                 return "❌ Shadow update failed"

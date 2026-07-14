@@ -5,15 +5,30 @@ import requests
 from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-from linebot import LineBotApi, WebhookHandler
-from linebot.models import TextSendMessage, MessageEvent, TextMessage
-from linebot.exceptions import InvalidSignatureError
 from dotenv import load_dotenv
 import certifi
 import paho.mqtt.client as mqtt
-from linebot.models import FlexSendMessage
 from datetime import datetime
+from pymodbus.client import ModbusTcpClient
+import asyncio
+from contextlib import asynccontextmanager
 
+# ================== LINE SDK v3 Imports ==================
+from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import (
+    Configuration,
+    ApiClient,
+    MessagingApi,
+    ReplyMessageRequest,
+    PushMessageRequest,
+    TextMessage,
+    FlexMessage
+)
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent
+)
 
 load_dotenv()
 
@@ -26,18 +41,22 @@ NETPIE_BROKER = os.getenv("NETPIE_BROKER", "broker.netpie.io")
 LINE_CHANNEL_TOKEN = os.getenv("LINE_CHANNEL_TOKEN", "")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 LINE_USER_ID = os.getenv("LINE_USER_ID", "")
+LINE_NOTIFY_TOKEN = os.getenv("LINE_NOTIFY_TOKEN", "") # เพิ่มตัวแปรนี้ครับ
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Environment detection
 IS_VERCEL = os.getenv("VERCEL", "0") == "1"
-USE_MQTT = True   # จะเป็น boolean True/False
+USE_MQTT = True
 
-# ================== MQTT Client (only if USE_MQTT = True) ==================
+# ================== OpenPLC Modbus Configuration ==================
+OPENPLC_HOST = "127.0.0.1"
+OPENPLC_PORT = 502
+OPENPLC_COIL_ADDRESS = 3  # Address 2 คือตัวแปร fu (ตามที่คุณตั้งค่า)
+
+# ================== MQTT Client ==================
 mqtt_client = None
-
-
-PROJECT_NAME = "MotorControl"   # กำหนดชื่อโปรเจกต์
+PROJECT_NAME = "MotorControl"
 MOTOR_VAR = "motor_run"
 
 def build_motor_flex(status: bool) -> dict:
@@ -85,47 +104,29 @@ def build_motor_flex(status: bool) -> dict:
         }
     }
 
-def push_flex_message(alt_text: str, flex_dict: dict, user_id: str = None):
-    uid = user_id or LINE_USER_ID
-    if not uid or not line_bot_api:
-        return False
-    try:
-        line_bot_api.push_message(uid, FlexSendMessage(alt_text=alt_text, contents=flex_dict))
-        print(f"Flex pushed to {uid}")
-        return True
-    except Exception as e:
-        print(f"Flex push error: {e}")
-        return False
-
 def get_mqtt_client():
-    """สร้าง MQTT client ใหม่ทุกครั้ง (Vercel) หรือใช้ persistent (Local)"""
     if USE_MQTT:
-        client = mqtt.Client(client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=NETPIE_CLIENT_ID, protocol=mqtt.MQTTv311)
         client.username_pw_set(NETPIE_TOKEN, NETPIE_SECRET)
         return client
     return None
 
 if USE_MQTT:
-    # Local persistent connection
     if not IS_VERCEL:
         mqtt_client = get_mqtt_client()
         mqtt_client.connect(NETPIE_BROKER, 1883, 60)
         mqtt_client.loop_start()
         print("✅ MQTT persistent connection started")
     else:
-        # Vercel: we create temporary clients
         print("ℹ️ MQTT mode enabled (temporary connections)")
 
-# ================== Shadow Publish (MQTT or REST) ==================
 def publish_shadow(data: dict) -> bool:
-    """Publish ไปยัง Shadow โดยเลือกใช้ MQTT หรือ REST ตามสภาพแวดล้อม"""
     if USE_MQTT:
         return _publish_shadow_mqtt(data)
     else:
         return _publish_shadow_rest(data)
 
 def _publish_shadow_mqtt(data: dict) -> bool:
-    # สร้าง client ใหม่ (temp) หรือใช้ persistent ถ้ามี
     client = get_mqtt_client()
     if client is None:
         return False
@@ -139,7 +140,6 @@ def _publish_shadow_mqtt(data: dict) -> bool:
     client.connect(NETPIE_BROKER, 1883, 60)
     client.loop_start()
 
-    # รอให้เชื่อมต่อสำเร็จ (ไม่เกิน 3 วินาที)
     timeout = 3
     start = time.time()
     while not conn_ok and (time.time() - start) < timeout:
@@ -168,7 +168,6 @@ def _publish_shadow_mqtt(data: dict) -> bool:
     client.disconnect()
     return ok
 
-
 def _publish_shadow_rest(data: dict) -> bool:
     url = "https://api.netpie.io/v2/device/shadow/data"
     headers = {
@@ -189,31 +188,53 @@ def _publish_shadow_rest(data: dict) -> bool:
         print(f"Shadow REST exception: {e}")
         return False
 
-# ================== LINE Setup ==================
-line_bot_api = None
+# ================== LINE Setup (v3) ==================
+configuration = None
 handler = None
 
 if LINE_CHANNEL_TOKEN:
-    line_bot_api = LineBotApi(LINE_CHANNEL_TOKEN)
+    configuration = Configuration(access_token=LINE_CHANNEL_TOKEN)
     if LINE_CHANNEL_SECRET:
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
-    try:
-        bot_info = line_bot_api.get_bot_info()
-        print(f"✅ LINE Bot ready: {bot_info.display_name}")
-    except Exception as e:
-        print(f"❌ LINE Bot init failed: {e}")
-        line_bot_api = None
+    print("✅ LINE Bot v3 initialized")
 
+# LINE Push Function (v3)
 def push_line_message(text: str, user_id: str = None):
     uid = user_id or LINE_USER_ID
-    if not uid or not line_bot_api:
+    if not uid or not configuration:
         return False
     try:
-        line_bot_api.push_message(uid, TextSendMessage(text=text))
+        with ApiClient(configuration) as api_client:
+            line_bot = MessagingApi(api_client)
+            line_bot.push_message(
+                PushMessageRequest(
+                    to=uid,
+                    messages=[TextMessage(text=text)]
+                )
+            )
         print(f"LINE pushed to {uid}: {text}")
         return True
     except Exception as e:
         print(f"LINE push error: {e}")
+        return False
+
+def push_flex_message(alt_text: str, flex_dict: dict, user_id: str = None):
+    uid = user_id or LINE_USER_ID
+    if not uid or not configuration:
+        return False
+    try:
+        with ApiClient(configuration) as api_client:
+            line_bot = MessagingApi(api_client)
+            line_bot.push_message(
+                PushMessageRequest(
+                    to=uid,
+                    messages=[FlexMessage(alt_text=alt_text, contents=flex_dict)]
+                )
+            )
+        print(f"Flex pushed to {uid}")
+        return True
+    except Exception as e:
+        print(f"Flex push error: {e}")
         return False
 
 # ================== MongoDB ==================
@@ -230,8 +251,35 @@ def test_mongo_connection():
         print(f"❌ MongoDB connection error: {e}")
         return False
 
-# ================== Command Processor ==================
-def process_command(text: str, user_id: str = "unknown") -> str:
+# ================== Modbus ==================
+def write_modbus_sync(address: int, value: bool) -> bool:
+    client = None
+    try:
+        client = ModbusTcpClient(OPENPLC_HOST, port=OPENPLC_PORT)
+        if not client.connect():
+            print(f"❌ ไม่สามารถเชื่อมต่อ OpenPLC ที่ {OPENPLC_HOST}:{OPENPLC_PORT}")
+            return False
+        
+        index = address - 1
+        response = client.write_coil(index, value)
+        client.close()
+        
+        if response.isError():
+            print(f"❌ Modbus Write Error: {response}")
+            return False
+            
+        print(f"✅ ส่ง Write Coil ไปที่ Address {address} ค่า {value} สำเร็จ")
+        return True
+    except Exception as e:
+        print(f"❌ Modbus Exception: {e}")
+        return False
+
+async def write_modbus_async(address: int, value: bool) -> bool:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, write_modbus_sync, address, value)
+
+# ================== Command Processor (Async version) ==================
+async def process_command(text: str, user_id: str = "unknown") -> str:
     trimmed = text.strip()
     print(f"📩 Command from {user_id}: '{trimmed}'")
 
@@ -252,8 +300,11 @@ def process_command(text: str, user_id: str = "unknown") -> str:
     elif trimmed == "start":
         data = {MOTOR_VAR: True}
         ok = publish_shadow(data)
+        
+        # 🆕 ส่งคำสั่งไปเปิด OpenPLC Address 2 (fu) ด้วย!
+        modbus_ok = await write_modbus_async(OPENPLC_COIL_ADDRESS, True)
+        
         if ok:
-            # บันทึกลง MongoDB
             mongo_collection.insert_one({
                 "timestamp": datetime.utcnow(),
                 "command": "start",
@@ -262,17 +313,20 @@ def process_command(text: str, user_id: str = "unknown") -> str:
                 "variable": MOTOR_VAR,
                 "value": True
             })
-            # ส่ง Flex Message สถานะ ON
             flex = build_motor_flex(True)
             push_flex_message("Motor ON", flex)
             push_line_message(f"▶️ มอเตอร์เริ่มทำงาน (Project: {PROJECT_NAME})")
-            return "✅ มอเตอร์เริ่มทำงาน"
+            return f"✅ มอเตอร์เริ่มทำงาน (Modbus: {'OK' if modbus_ok else 'Failed'})"
         else:
             return "❌ ไม่สามารถเริ่มมอเตอร์ได้"
 
     elif trimmed == "stop":
         data = {MOTOR_VAR: False}
         ok = publish_shadow(data)
+        
+        # 🆕 ส่งคำสั่งไปปิด OpenPLC Address 2 (fu) ด้วย!
+        modbus_ok = await write_modbus_async(OPENPLC_COIL_ADDRESS, False)
+        
         if ok:
             mongo_collection.insert_one({
                 "timestamp": datetime.utcnow(),
@@ -285,7 +339,7 @@ def process_command(text: str, user_id: str = "unknown") -> str:
             flex = build_motor_flex(False)
             push_flex_message("Motor OFF", flex)
             push_line_message(f"⏹️ มอเตอร์หยุดทำงาน (Project: {PROJECT_NAME})")
-            return "✅ มอเตอร์หยุดทำงาน"
+            return f"✅ มอเตอร์หยุดทำงาน (Modbus: {'OK' if modbus_ok else 'Failed'})"
         else:
             return "❌ ไม่สามารถหยุดมอเตอร์ได้"
 
@@ -309,36 +363,17 @@ def process_command(text: str, user_id: str = "unknown") -> str:
     else:
         return f"Unknown command: '{trimmed}'. Type 'help' for list."
 
-def send_line_notify(message: str) -> bool:
-    """ส่งข้อความผ่าน LINE Notify"""
-    if not LINE_NOTIFY_TOKEN:
-        print("LINE Notify token not configured")
-        return False
-    url = "https://notify-api.line.me/api/notify"
-    headers = {
-        "Authorization": f"Bearer {LINE_NOTIFY_TOKEN}"
-    }
-    data = {"message": message}
-    try:
-        resp = requests.post(url, headers=headers, data=data, timeout=10)
-        if resp.status_code == 200:
-            print(f"LINE Notify sent: {message}")
-            return True
-        else:
-            print(f"LINE Notify failed: {resp.status_code} {resp.text}")
-            return False
-    except Exception as e:
-        print(f"LINE Notify exception: {e}")
-        return False
-    
-# ================== FastAPI ==================
-app = FastAPI(title="IoT Starter", version="3.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-
-@app.on_event("startup")
-async def startup():
+# ================== FastAPI Lifespan & App ==================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     test_mongo_connection()
+    yield
+    # Shutdown (ถ้ามี)
+    # mongo_client.close()
+
+app = FastAPI(title="IoT Starter", version="3.0.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
 def root():
@@ -382,17 +417,24 @@ async def line_callback(request: Request):
     return "OK"
 
 if handler:
-    @handler.add(MessageEvent, message=TextMessage)
+    @handler.add(MessageEvent, message=TextMessageContent)
     def handle_message(event):
         user_id = event.source.user_id
         text = event.message.text
-        reply = process_command(text, user_id)
+        # ใช้ asyncio.create_task เพื่อรัน async โดยไม่บล็อก Webhook
+        asyncio.create_task(process_and_reply(event, user_id, text))
 
+    async def process_and_reply(event, user_id, text):
+        reply = await process_command(text, user_id)
         try:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=reply)
-            )
+            with ApiClient(configuration) as api_client:
+                line_bot = MessagingApi(api_client)
+                line_bot.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=reply)]
+                    )
+                )
             print(f"Replied: {reply}")
         except Exception as e:
             print(f"Reply error: {e}")
@@ -406,26 +448,27 @@ async def dev_line(body: dict = Body(...)):
     for event in events:
         if event.get("type") == "message" and event.get("message", {}).get("type") == "text":
             text = event["message"]["text"]
-            reply_text = process_command(text, "dev-user")
+            reply_text = await process_command(text, "dev-user")
             push_line_message(reply_text)
     return {"status": "processed"}
 
 @app.post("/auto-status")
 async def auto_status():
-    # อ่านสถานะปัจจุบันจาก Shadow (ผ่าน REST) หรือใช้ตัวแปร global
-    # ตัวอย่างนี้สมมติว่าเรารู้ว่า motor_run ล่าสุดคืออะไร (อาจต้อง query Shadow)
-    # แต่เพื่อความง่าย เราจะสุ่มสถานะเพื่อทดสอบ
+    # status in real time use cron job for schedule time for notification
     import random
     status = random.choice([True, False])
     flex = build_motor_flex(status)
     push_flex_message("Motor Status Update", flex)
-    # บันทึกใน MongoDB
-    # mongo_collection.insert_one({
-    #     "timestamp": datetime.utcnow(),
-    #     "command": "auto",
-    #     "user": "system",
-    #     "project": PROJECT_NAME,
-    #     "variable": MOTOR_VAR,
-    #     "value": status
-    # })
     return {"sent": True, "status": status}
+
+@app.post("/api/modbus/write")
+async def api_modbus_write(body: dict = Body(...)):
+    """API รับค่าไป Write Coil ยัง OpenPLC โดยตรง"""
+    address = body.get("address", OPENPLC_COIL_ADDRESS)
+    value = body.get("value", False)
+    
+    success = await write_modbus_async(int(address), bool(value))
+    if success:
+        return {"status": "success", "message": f"เขียนค่า {value} ไปที่ Address {address} แล้ว"}
+    else:
+        raise HTTPException(status_code=500, detail="Modbus Write Failed")

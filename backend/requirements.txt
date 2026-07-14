@@ -11,3 +11,4 @@ fastapi
 numpy
 line-bot-sdk
 uvicorn
+pymodbus

@@ -27,7 +27,12 @@ async def lifespan(app: FastAPI):
         mongo_client.close()
     print("🛑 Shutting down...")
 
-app = FastAPI(title="IoT Starter Clean", version="4.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="IoT Starter Clean",
+    version="4.0.0",
+    description="IoT Gateway API - MQTT / Modbus / LINE Bot integration",
+    lifespan=lifespan,
+)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # Register all controllers

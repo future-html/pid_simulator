@@ -1,10 +1,16 @@
 from fastapi import APIRouter, HTTPException
 from services.mqtt import publish_shadow
-from models import MqttPublishRequest
+from models import MqttPublishRequest, MqttPublishResponse
 
-router = APIRouter()
+router = APIRouter(tags=["MQTT"])
 
-@router.post("/publish")
+@router.post(
+    "/publish",
+    response_model=MqttPublishResponse,
+    summary="Publish data to MQTT shadow",
+    description="ส่งข้อมูล batch เข้า NETPIE shadow ผ่าน MQTT รองรับหลาย field พร้อมกัน "
+                 "เช่น {\"data\": {\"motor_run\": true, \"speed\": 50}}",
+)
 async def api_publish_mqtt(body: MqttPublishRequest):
     if not body.data:
         raise HTTPException(400, "Field 'data' must not be empty")

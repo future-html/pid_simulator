@@ -36,3 +36,16 @@ class OrderRequest(BaseModel):
 
 class MqttPublishRequest(BaseModel):
     data: Dict[str, Any]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"data": {"motor_run": True, "speed": 50}}
+            ]
+        }
+    }
+
+class MqttPublishResponse(BaseModel):
+    status: str
+    message: str
+    data: Dict[str, Any]

@@ -8,6 +8,7 @@ def register_routers(app):
     from .data import router as data_router
     from .menu import router as menu_router
     from .order import router as order_router
+    from .mqtt import router as mqtt_router
     app.include_router(root_router)
     app.include_router(modbus_router, prefix="/api/modbus")
     app.include_router(line_router)
@@ -15,3 +16,4 @@ def register_routers(app):
     app.include_router(data_router, prefix="/api/data")
     app.include_router(menu_router, prefix="/api/menu")
     app.include_router(order_router, prefix="/api/order")
+    app.include_router(mqtt_router, prefix="/api/mqtt")

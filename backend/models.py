@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-
+from typing import Any, Dict
 class ModbusCoilRequest(BaseModel):
     address: int
     value: bool
@@ -33,3 +33,6 @@ class OrderRequest(BaseModel):
     items: list[OrderItem]
     payment_method: str
     user_id: str = "unknown"
+
+class MqttPublishRequest(BaseModel):
+    data: Dict[str, Any]

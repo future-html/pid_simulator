@@ -1,22 +1,26 @@
 import json
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from utils import build_motor_flex
-from services.mongo import mongo_collection
+from services.mongo import mongo_collection, save_mqtt_data
 from services.mqtt import publish_shadow
 from services.modbus import write_modbus_coil_async
 from services.line import push_line_message, push_flex_message
 from config import config
-
 # ฟังก์ชันสำหรับ MQTT Subscriber Callback
 def on_modbus_data_received(data: dict):
     """ตัวอย่างการแจ้งเตือน เมื่อมีข้อมูลมา"""
     modbus_data = data.get("data", {})
     level = modbus_data.get("level")
-    
+
+    # --- เพิ่มใหม่: save ข้อมูล MQTT ทุก message ลง mqtt_data collection ---
+    save_mqtt_data({
+        "data": modbus_data,
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+
     if level is not None and level > 80:
         push_line_message(f"⚠️ ระดับน้ำสูงเกิน 80! ค่าปัจจุบัน: {level}")
-
 async def process_command(text: str, user_id: str = "unknown") -> str:
     trimmed = text.strip()
     
@@ -30,7 +34,6 @@ async def process_command(text: str, user_id: str = "unknown") -> str:
             return "❌ Shadow update failed"
         except json.JSONDecodeError:
             return "❌ Invalid JSON"
-
     elif trimmed == "start":
         success = publish_shadow({config.MOTOR_VAR: True})
         modbus_ok = await write_modbus_coil_async(config.OPENPLC_COIL_ADDRESS, True)
@@ -44,7 +47,6 @@ async def process_command(text: str, user_id: str = "unknown") -> str:
             push_flex_message("Motor ON", flex)
             return f"✅ เปิดมอเตอร์ (Modbus: {'OK' if modbus_ok else 'Failed'})"
         return "❌ Start failed"
-
     elif trimmed == "stop":
         success = publish_shadow({config.MOTOR_VAR: False})
         modbus_ok = await write_modbus_coil_async(config.OPENPLC_COIL_ADDRESS, False)
@@ -66,7 +68,6 @@ async def process_command(text: str, user_id: str = "unknown") -> str:
             doc["_id"] = str(doc["_id"])
             return f"📄 Latest: {json.dumps(doc, default=str)}"
         return "📭 No data"
-
     elif trimmed == "help":
         return "Commands: shadow {json}, start, stop, mongo, help"
     else:
